@@ -79,8 +79,8 @@ jobs:
           flutter-version: '3.24.5'
           channel: stable
 
-      - name: 生成 iOS 原生工程壳
-        run: flutter create --platforms=ios --project-name gdgm_schedule --org cn.gdgm.schedule .
+      - name: 生成原生工程壳（含 android，供 flutter_launcher_icons 使用）
+        run: flutter create --platforms=android,ios --project-name gdgm_schedule --org cn.gdgm.schedule .
 
       - name: 设置 iOS 最低版本为 12.0（flutter_inappwebview 要求）
         run: |
