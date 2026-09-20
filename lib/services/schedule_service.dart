@@ -26,6 +26,58 @@ class ScheduleService {
   /// 抛出该异常表示会话已失效，需要重新登录
   static const sessionExpired = 'SESSION_EXPIRED';
 
+  /// 教务桌面页（含 .middletopleftrqbox 当前周/日期块）
+  static const String _desktopUrl =
+      '${AppConfig.jwHost}/jsxsd/framework/xsMain_new.jsp';
+
+  /// 拉取学期日历（当前周/总周数/当前日期）。失败返回 null（不影响课表）。
+  Future<TermCalendar?> fetchCalendar() async {
+    try {
+      final resp = await _dio.get<String>(_desktopUrl);
+      final body = resp.data ?? '';
+      final isRedirect = resp.statusCode != null &&
+          resp.statusCode! >= 300 &&
+          resp.statusCode! < 400;
+      if (isRedirect || body.contains('用户登录')) return null;
+
+      final doc = html_parser.parse(body);
+
+      // 第X周 / Y周
+      int? cur;
+      int? total;
+      final showWeek = doc.querySelector('#li_showWeek');
+      if (showWeek != null) {
+        final txt = showWeek.text; // "第3周/20周"
+        final mCur = RegExp(r'第\s*(\d+)\s*周').firstMatch(txt);
+        cur = mCur != null ? int.tryParse(mCur.group(1)!) : null;
+        final mTotal = RegExp(r'/\s*(\d+)\s*周').firstMatch(txt);
+        total = mTotal != null ? int.tryParse(mTotal.group(1)!) : null;
+      }
+
+      // 当前日期
+      DateTime? date;
+      final rq = doc.querySelector('#rq');
+      final rqVal = rq?.attributes['value'] ?? '';
+      final mDate = RegExp(r'(\d{4})-(\d{1,2})-(\d{1,2})').firstMatch(rqVal);
+      if (mDate != null) {
+        date = DateTime(
+          int.parse(mDate.group(1)!),
+          int.parse(mDate.group(2)!),
+          int.parse(mDate.group(3)!),
+        );
+      }
+
+      if (cur == null || date == null) return null;
+      return TermCalendar(
+        currentWeek: cur,
+        totalWeeks: total ?? 20,
+        date: date,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// 查询课表。
   /// [term] 学年学期(如 2026-2027-1)，[week] 周次(1..)，[campus] 时间模式id。
   /// 传 null 表示用服务器默认值。

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
 import 'pages/home_shell.dart';
+import 'services/schedule_prefs.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await SchedulePrefs.instance.load();
   runApp(const ScheduleApp());
 }
 
@@ -12,7 +15,7 @@ class ScheduleApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '广工贸课表',
+      title: 'GMPluse',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorSchemeSeed: const Color(0xFF5B8FF9),

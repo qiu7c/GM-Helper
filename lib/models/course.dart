@@ -96,3 +96,24 @@ class SelectOption {
   final String label;
   const SelectOption(this.value, this.label);
 }
+
+/// 学期日历信息，来自教务桌面页 .middletopleftrqbox：
+/// 当前第几周、总周数、系统当前日期。由此推算学期第一周周一。
+class TermCalendar {
+  final int currentWeek;
+  final int totalWeeks;
+  final DateTime date; // 系统当前日期
+
+  const TermCalendar({
+    required this.currentWeek,
+    required this.totalWeeks,
+    required this.date,
+  });
+
+  /// 学期第 1 周的周一 = 当前日期所在周的周一 - (当前周-1)*7 天
+  DateTime get firstMonday {
+    final monday = date.subtract(Duration(days: date.weekday - 1));
+    return DateTime(monday.year, monday.month, monday.day)
+        .subtract(Duration(days: (currentWeek - 1) * 7));
+  }
+}

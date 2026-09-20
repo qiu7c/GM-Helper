@@ -4,6 +4,7 @@ import 'package:cookie_jar/cookie_jar.dart';
 import 'package:dio/dio.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 import 'package:encrypt/encrypt.dart' as enc;
+import 'package:flutter/foundation.dart';
 import 'package:html/parser.dart' as html_parser;
 
 import '../config.dart';
@@ -18,13 +19,9 @@ class CasLoginException implements Exception {
 
 /// 纯 HTTP 模拟统一身份认证(CAS)登录。
 ///
-/// 流程与浏览器一致：
-///  1. GET 登录页 → 取动态令牌(lt/execution) 与密码加密盐(pwdDefaultEncryptSalt)
-///  2. 按 wisedu 的 encryptAES 加密密码
-///  3. POST 提交表单 → CAS 发 ticket，dio 带 CookieJar 自动跟随 302
-///     经 eportal 种会话
-///  4. 再访问 appShow 教务入口，服务端 302 给 jw.gdgm.cn 种课表会话
-///  5. 从 CookieJar 导出 jw.gdgm.cn 的 Cookie 字符串
+/// 关键点：**手动逐跳跟随 302 重定向**，每跳都过 CookieJar。
+/// 若用 dio 的自动 followRedirects，中间跳转的 Set-Cookie 会丢失，
+/// 导致 SSO 过程中 eportal/jw 逐跳种的会话 cookie 拿不到。
 class CasLoginService {
   late final CookieJar _jar;
   late final Dio _dio;
@@ -32,37 +29,43 @@ class CasLoginService {
   CasLoginService() {
     _jar = CookieJar();
     _dio = Dio(BaseOptions(
-      followRedirects: true,
-      maxRedirects: 10,
-      // 4xx/3xx 都放行，自己判断
+      followRedirects: false, // 手动跟跳，保证每跳都过 CookieJar
       validateStatus: (s) => s != null && s < 500,
       headers: {
         'User-Agent':
             'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 '
                 '(KHTML, like Gecko) Chrome/120 Mobile Safari/537.36',
+        'Accept':
+            'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       },
     ));
     _dio.interceptors.add(CookieManager(_jar));
   }
 
-  /// 登录并返回 jw.gdgm.cn 的 Cookie 字符串（形如 "JSESSIONID=xxx; ..."）。
-  /// 失败抛 [CasLoginException]。
+  bool debugLog = false;
+  final List<String> _trace = [];
+  List<String> get trace => List.unmodifiable(_trace);
+
+  /// 登录并返回 jw.gdgm.cn 的 Cookie 字符串。失败抛 [CasLoginException]。
   Future<String> login(String username, String password) async {
-    // 1) 取登录页
-    final loginPageResp = await _dio.get<String>(AppConfig.loginPwdUrl);
-    final pageHtml = loginPageResp.data ?? '';
+    _trace.clear();
+
+    // 1) 取登录页（可能自身也有跳转）
+    final pageResp = await _follow(RequestOptions(
+      path: AppConfig.loginPwdUrl,
+      method: 'GET',
+    ));
+    final pageHtml = pageResp.data?.toString() ?? '';
     if (pageHtml.isEmpty) {
       throw CasLoginException('无法打开登录页，请检查网络');
     }
 
     final doc = html_parser.parse(pageHtml);
-    final form = doc.querySelector('#casLoginForm') ??
-        doc.querySelector('form');
-    if (form == null) {
-      throw CasLoginException('登录页解析失败');
-    }
+    final form =
+        doc.querySelector('#casLoginForm') ?? doc.querySelector('form');
+    if (form == null) throw CasLoginException('登录页解析失败');
 
-    // 提取表单所有隐藏字段（lt/execution/_eventId/dllt/rmShown 等）
+    // 隐藏字段：lt / execution / _eventId / dllt / rmShown ...
     final formData = <String, String>{};
     for (final input in form.querySelectorAll('input')) {
       final name = input.attributes['name'];
@@ -70,66 +73,67 @@ class CasLoginService {
       formData[name] = input.attributes['value'] ?? '';
     }
 
-    // 提取加密盐
-    final salt = _extractSalt(pageHtml);
-
-    // 若页面强制要求验证码，直接提示走 WebView
+    // 验证码强制出现则提示走 WebView
     if (pageHtml.contains('id="cpatchaDiv"') &&
-        !pageHtml.contains('id="cpatchaDiv" style="display: none;')) {
+        !pageHtml.contains('id="cpatchaDiv" style="display: none;"')) {
       throw CasLoginException('需要验证码，请改用网页登录');
     }
 
-    // 2) 加密密码（无盐则明文）
-    final encrypted =
+    final salt = _extractSalt(pageHtml);
+    formData['username'] = username;
+    formData['password'] =
         salt.isEmpty ? password : _encryptPassword(password, salt);
 
-    formData['username'] = username;
-    formData['password'] = encrypted;
-
-    // 提交地址：优先用表单 action，否则回退配置
     final action = form.attributes['action'];
     final postUrl = (action != null && action.isNotEmpty)
-        ? Uri.parse(AppConfig.loginPwdUrl).resolve(action).toString()
+        ? pageResp.realUri.resolve(action).toString()
         : AppConfig.loginPwdUrl;
 
-    // 3) POST 登录
-    final postResp = await _dio.post<String>(
-      postUrl,
-      data: formData,
-      options: Options(
-        contentType: Headers.formUrlEncodedContentType,
-        headers: {
-          'Referer': AppConfig.loginPwdUrl,
-          'Origin': 'https://sfrz.gdgm.cn',
-        },
-      ),
-    );
+    // 2) POST 登录，并逐跳跟随其后的 302 链（经 eportal 种会话）
+    final postResp = await _follow(RequestOptions(
+      path: postUrl,
+      method: 'POST',
+      data: _encodeForm(formData),
+      contentType: Headers.formUrlEncodedContentType,
+      headers: {
+        'Referer': AppConfig.loginPwdUrl,
+        'Origin': 'https://sfrz.gdgm.cn',
+      },
+    ));
 
-    final respHtml = postResp.data ?? '';
     final finalUrl = postResp.realUri.toString();
-
-    // 仍停在认证域且返回登录表单 → 账号密码错误或需验证码
-    final stillOnAuth = finalUrl.contains('sfrz.gdgm.cn/authserver');
-    if (stillOnAuth && respHtml.contains('casLoginForm')) {
+    final respHtml = postResp.data?.toString() ?? '';
+    if (finalUrl.contains('sfrz.gdgm.cn/authserver') &&
+        respHtml.contains('casLoginForm')) {
       throw CasLoginException(_extractError(respHtml));
     }
 
-    // 4) 走教务入口握手（服务端 302 给 jw 种会话）
-    await _dio.get<String>(
-      AppConfig.jwEntryUrl,
-      options: Options(headers: {'Referer': AppConfig.portalUrl}),
-    );
-    // 兜底再点一次教务主框架，确保拿到 JSESSIONID
-    await _dio.get<String>(
-      AppConfig.jwMainUrl,
-      options: Options(headers: {'Referer': AppConfig.portalUrl}),
-    );
+    // 3) 走教务入口 appShow，逐跳跟到 jw，给 jw 种会话
+    await _follow(RequestOptions(
+      path: AppConfig.jwEntryUrl,
+      method: 'GET',
+      headers: {'Referer': AppConfig.portalUrl},
+    ));
+
+    // 4) 再访问一次教务主框架，确保 JSESSIONID 落定
+    await _follow(RequestOptions(
+      path: AppConfig.jwMainUrl,
+      method: 'GET',
+      headers: {'Referer': AppConfig.portalUrl},
+    ));
 
     // 5) 导出 jw.gdgm.cn 的 Cookie
-    final cookies =
-        await _jar.loadForRequest(Uri.parse(AppConfig.jwHost));
+    final cookies = await _jar.loadForRequest(Uri.parse(AppConfig.jwHost));
     final cookieStr =
         cookies.map((c) => '${c.name}=${c.value}').join('; ');
+
+    if (debugLog) {
+      debugPrint('=== CAS 登录跳转链 ===');
+      for (final t in _trace) {
+        debugPrint(t);
+      }
+      debugPrint('jw cookies: $cookieStr');
+    }
 
     if (cookieStr.isEmpty || !cookieStr.contains('JSESSIONID')) {
       throw CasLoginException('登录成功但未取得教务会话，请重试或改用网页登录');
@@ -137,16 +141,47 @@ class CasLoginService {
     return cookieStr;
   }
 
-  /// wisedu encryptAES：AES-CBC-PKCS7，key=盐，iv=随机16位，明文=随机64位+密码，输出base64
+  /// 手动逐跳跟随重定向。每跳请求都经过 CookieManager 拦截器，
+  /// 因此中途 Set-Cookie 会被正确存入 CookieJar，也会带上已有 cookie。
+  Future<Response> _follow(RequestOptions options, {int max = 15}) async {
+    var opts = options;
+    Response resp = await _dio.fetch(opts);
+    _trace.add('${opts.method} ${opts.path} -> ${resp.statusCode}');
+
+    var hops = 0;
+    while (_isRedirect(resp.statusCode) && hops < max) {
+      final loc = resp.headers.value('location');
+      if (loc == null || loc.isEmpty) break;
+      final next = resp.realUri.resolve(loc);
+      hops++;
+      opts = RequestOptions(
+        path: next.toString(),
+        method: 'GET', // 302 后一律 GET
+        headers: {'Referer': resp.realUri.toString()},
+        followRedirects: false,
+        validateStatus: (s) => s != null && s < 500,
+      );
+      resp = await _dio.fetch(opts);
+      _trace.add('GET $next -> ${resp.statusCode}');
+    }
+    return resp;
+  }
+
+  bool _isRedirect(int? s) => s != null && s >= 300 && s < 400;
+
+  String _encodeForm(Map<String, String> data) => data.entries
+      .map((e) =>
+          '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}')
+      .join('&');
+
+  /// wisedu encryptAES：AES-CBC-PKCS7，key=盐，iv=随机16位，明文=随机64位+密码，base64
   String _encryptPassword(String password, String salt) {
     final key = enc.Key.fromUtf8(salt);
-    final ivStr = _randomString(16);
-    final iv = enc.IV.fromUtf8(ivStr);
+    final iv = enc.IV.fromUtf8(_randomString(16));
     final encrypter = enc.Encrypter(
       enc.AES(key, mode: enc.AESMode.cbc, padding: 'PKCS7'),
     );
-    final plain = _randomString(64) + password;
-    return encrypter.encrypt(plain, iv: iv).base64;
+    return encrypter.encrypt(_randomString(64) + password, iv: iv).base64;
   }
 
   String _extractSalt(String html) {
@@ -155,12 +190,10 @@ class CasLoginService {
     return m?.group(1) ?? '';
   }
 
-  /// 从返回页面提取错误提示（如"用户名或密码错误"）
   String _extractError(String html) {
     final doc = html_parser.parse(html);
     for (final sel in ['#showErrorTip', '.login-error', '#msg', '.errors']) {
-      final el = doc.querySelector(sel);
-      final t = el?.text.trim() ?? '';
+      final t = doc.querySelector(sel)?.text.trim() ?? '';
       if (t.isNotEmpty) return t;
     }
     if (html.contains('用户名或密码') || html.contains('密码错误')) {

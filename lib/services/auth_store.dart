@@ -6,6 +6,8 @@ class AuthStore {
   static const _kTerm = 'last_term';
   static const _kCampus = 'last_campus';
   static const _kUsername = 'saved_username';
+  static const _kFirstMonday = 'term_first_monday';
+  static const _kTotalWeeks = 'term_total_weeks';
 
   /// 保存登录后抓取到的 Cookie 字符串（形如 "JSESSIONID=xxx; ..."）
   static Future<void> saveCookie(String cookie) async {
@@ -57,5 +59,27 @@ class AuthStore {
   static Future<String?> getSavedUsername() async {
     final sp = await SharedPreferences.getInstance();
     return sp.getString(_kUsername);
+  }
+
+  /// 学期第一周周一（来自教务日历），存 ISO 字符串
+  static Future<void> saveFirstMonday(DateTime d) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_kFirstMonday, d.toIso8601String());
+  }
+
+  static Future<DateTime?> getFirstMonday() async {
+    final sp = await SharedPreferences.getInstance();
+    final s = sp.getString(_kFirstMonday);
+    return s == null ? null : DateTime.tryParse(s);
+  }
+
+  static Future<void> saveTotalWeeks(int n) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setInt(_kTotalWeeks, n);
+  }
+
+  static Future<int?> getTotalWeeks() async {
+    final sp = await SharedPreferences.getInstance();
+    return sp.getInt(_kTotalWeeks);
   }
 }

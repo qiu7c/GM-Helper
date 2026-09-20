@@ -19,6 +19,7 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
   bool _obscure = true;
   bool _loading = false;
   String? _error;
+  List<String> _trace = [];
 
   @override
   void initState() {
@@ -50,15 +51,26 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
       _error = null;
     });
 
+    final service = CasLoginService()..debugLog = true;
     try {
-      final cookie = await CasLoginService().login(user, pwd);
+      final cookie = await service.login(user, pwd);
       await AuthStore.saveCookie(cookie);
       await AuthStore.saveUsername(user);
       if (mounted) Navigator.of(context).pop(true);
     } on CasLoginException catch (e) {
-      if (mounted) setState(() => _error = e.message);
+      if (mounted) {
+        setState(() {
+          _error = e.message;
+          _trace = service.trace;
+        });
+      }
     } catch (e) {
-      if (mounted) setState(() => _error = '登录失败：$e');
+      if (mounted) {
+        setState(() {
+          _error = '登录失败：$e';
+          _trace = service.trace;
+        });
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -81,7 +93,10 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
           padding: const EdgeInsets.all(24),
           children: [
             const SizedBox(height: 12),
-            const Icon(Icons.school, size: 64, color: Color(0xFF5B8FF9)),
+            Center(
+              child: Image.asset('assets/icon/app_logo.png',
+                  width: 80, height: 80),
+            ),
             const SizedBox(height: 8),
             const Center(
               child: Text('广工贸课表',
@@ -126,6 +141,24 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
               const SizedBox(height: 16),
               Text(_error!,
                   style: const TextStyle(color: Colors.redAccent)),
+              if (_trace.isNotEmpty)
+                ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  title: const Text('查看登录过程（排错用）',
+                      style: TextStyle(fontSize: 13, color: Colors.grey)),
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      color: Colors.black.withOpacity(0.04),
+                      child: SelectableText(
+                        _trace.join('\n'),
+                        style: const TextStyle(
+                            fontSize: 11, fontFamily: 'monospace'),
+                      ),
+                    ),
+                  ],
+                ),
             ],
             const SizedBox(height: 24),
             FilledButton(

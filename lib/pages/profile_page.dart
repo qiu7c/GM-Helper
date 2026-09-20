@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 
+import '../models/course.dart';
 import '../services/auth_store.dart';
 import '../services/profile_service.dart';
+import '../services/schedule_prefs.dart';
+import '../services/schedule_service.dart';
+import 'about_page.dart';
 import 'password_login_page.dart';
 
-/// "我的"页：检查登录状态，展示详细学籍信息，支持退出登录。
+/// "我的"页：检查登录状态，展示详细学籍信息，选择学期/校区，退出登录。
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
 
@@ -18,13 +22,17 @@ class _ProfilePageState extends State<ProfilePage> {
   _Status _status = _Status.checking;
   Profile? _profile;
 
+  List<SelectOption> _terms = [];
+  List<SelectOption> _campuses = [];
+  String? _term;
+  String? _campus;
+
   @override
   void initState() {
     super.initState();
     _check();
   }
 
-  /// 检查登录状态并拉取个人信息：本地有 Cookie 且能成功请求才算真正登录
   Future<void> _check() async {
     setState(() => _status = _Status.checking);
 
@@ -35,19 +43,31 @@ class _ProfilePageState extends State<ProfilePage> {
     }
 
     try {
-      final profile = await ProfileService(cookie).fetch();
+      // 并行取学籍信息与课表下拉项(学期/校区)
+      final profileF = ProfileService(cookie).fetch();
+      final scheduleF = ScheduleService(cookie).fetch(
+        term: await AuthStore.getLastTerm(),
+        campus: await AuthStore.getLastCampus(),
+      );
+      final profile = await profileF;
+      final schedule = await scheduleF;
       if (!mounted) return;
       setState(() {
         _status = _Status.loggedIn;
         _profile = profile;
+        _terms = schedule.terms;
+        _campuses = schedule.campuses;
+        _term = schedule.selectedTerm;
+        _campus = schedule.selectedCampus;
       });
+      SchedulePrefs.instance.sync(term: _term, campus: _campus);
     } catch (e) {
       if (!mounted) return;
-      if (e == ProfileService.sessionExpired) {
+      if (e == ProfileService.sessionExpired ||
+          e == ScheduleService.sessionExpired) {
         await AuthStore.clear();
         setState(() => _status = _Status.loggedOut);
       } else {
-        // 网络等其它错误：本地有 Cookie 就先当已登录，避免误判
         setState(() => _status = _Status.loggedIn);
       }
     }
@@ -81,8 +101,63 @@ class _ProfilePageState extends State<ProfilePage> {
       setState(() {
         _status = _Status.loggedOut;
         _profile = null;
+        _terms = [];
+        _campuses = [];
       });
     }
+  }
+
+  Future<void> _pickTerm() async {
+    if (_terms.isEmpty) return;
+    final v = await _pickOption('选择学期', _terms, _term);
+    if (v != null) {
+      setState(() => _term = v);
+      await SchedulePrefs.instance.setTerm(v); // 通知课表页重载
+    }
+  }
+
+  Future<void> _pickCampus() async {
+    if (_campuses.isEmpty) return;
+    final v = await _pickOption('选择校区', _campuses, _campus);
+    if (v != null) {
+      setState(() => _campus = v);
+      await SchedulePrefs.instance.setCampus(v);
+    }
+  }
+
+  Future<String?> _pickOption(
+      String title, List<SelectOption> opts, String? current) {
+    return showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => ListView(
+        shrinkWrap: true,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+            child: Text(title,
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.bold)),
+          ),
+          ...opts.map((o) => ListTile(
+                title: Text(o.label),
+                trailing: o.value == current
+                    ? const Icon(Icons.check, color: Colors.green)
+                    : null,
+                selected: o.value == current,
+                onTap: () => Navigator.pop(context, o.value),
+              )),
+        ],
+      ),
+    );
+  }
+
+  String _labelOf(List<SelectOption> opts, String? value, String fallback) {
+    if (value == null) return fallback;
+    for (final o in opts) {
+      if (o.value == value) return o.label;
+    }
+    return fallback;
   }
 
   @override
@@ -98,6 +173,15 @@ class _ProfilePageState extends State<ProfilePage> {
             const SizedBox(height: 24),
             if (_status == _Status.loggedIn) ..._loggedInTiles(),
             if (_status == _Status.loggedOut) _loginTile(),
+            const Divider(),
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('关于'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const AboutPage()),
+              ),
+            ),
           ],
         ),
       ),
@@ -152,7 +236,6 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  /// 已登录时的头部：头像 + 姓名 + 学号
   Widget _profileHeader(Profile p) {
     final name = p.name.isNotEmpty ? p.name : '同学';
     final initial = p.name.isNotEmpty ? p.name.characters.first : '?';
@@ -160,8 +243,7 @@ class _ProfilePageState extends State<ProfilePage> {
       children: [
         CircleAvatar(
           radius: 40,
-          backgroundColor:
-              Theme.of(context).colorScheme.primaryContainer,
+          backgroundColor: Theme.of(context).colorScheme.primaryContainer,
           child: Text(
             initial,
             style: TextStyle(
@@ -191,24 +273,29 @@ class _ProfilePageState extends State<ProfilePage> {
 
     return [
       if (fields.isNotEmpty) ...[
-        _sectionTitle('学籍信息'),
-        for (final e in fields)
-          ListTile(
-            dense: true,
-            leading: Icon(_iconFor(e.key), size: 20, color: Colors.grey),
-            title: Text(e.key),
-            trailing: Flexible(
-              child: Text(
-                e.value,
-                textAlign: TextAlign.right,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ),
-        const Divider(),
+        _sectionTitle('信息'),
+        for (final e in fields) _infoRow(e.key, e.value),
       ],
+      _sectionTitle('课表设置'),
+      ListTile(
+        leading: const Icon(Icons.calendar_month),
+        title: const Text('学期'),
+        subtitle: _terms.isEmpty ? const Text('登录后可选') : null,
+        trailing: Text(_labelOf(_terms, _term, '默认'),
+            style: const TextStyle(color: Colors.grey)),
+        onTap: _terms.isEmpty ? null : _pickTerm,
+      ),
+      ListTile(
+        leading: const Icon(Icons.location_city),
+        title: const Text('校区'),
+        subtitle: _campuses.isEmpty ? const Text('登录后可选') : null,
+        trailing: Text(_labelOf(_campuses, _campus, '默认'),
+            style: const TextStyle(color: Colors.grey)),
+        onTap: _campuses.isEmpty ? null : _pickCampus,
+      ),
+      const Divider(),
       const ListTile(
-        leading: Icon(Icons.info_outline),
+        leading: Icon(Icons.storage_outlined),
         title: Text('数据来源'),
         subtitle: Text('广东工贸职业技术学院教务系统'),
       ),
@@ -219,11 +306,36 @@ class _ProfilePageState extends State<ProfilePage> {
       ),
       ListTile(
         leading: const Icon(Icons.logout, color: Colors.redAccent),
-        title:
-            const Text('退出登录', style: TextStyle(color: Colors.redAccent)),
+        title: const Text('退出登录',
+            style: TextStyle(color: Colors.redAccent)),
         onTap: _logout,
       ),
     ];
+  }
+
+  /// 一条信息行：左图标+字段名，右值。值用 Expanded 占满剩余宽度，
+  /// 避免此前放在 ListTile.trailing 里被挤成一列竖排的问题。
+  Widget _infoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(_iconFor(label), size: 20, color: Colors.grey),
+          const SizedBox(width: 16),
+          SizedBox(
+            width: 76,
+            child: Text(label,
+                style: const TextStyle(color: Colors.grey, fontSize: 14)),
+          ),
+          Expanded(
+            child: Text(value,
+                textAlign: TextAlign.right,
+                style: const TextStyle(fontSize: 14)),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _sectionTitle(String title) => Padding(

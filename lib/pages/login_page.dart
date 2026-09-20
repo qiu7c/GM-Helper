@@ -77,7 +77,7 @@ class _LoginPageState extends State<LoginPage> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.school, size: 72, color: Color(0xFF5B8FF9)),
+          Image.asset('assets/icon/app_logo.png', width: 80, height: 80),
           const SizedBox(height: 12),
           const Text('广工贸课表',
               style:

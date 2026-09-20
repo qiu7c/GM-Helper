@@ -32,17 +32,21 @@ jobs:
       - name: 生成 Android/iOS 原生工程壳
         run: flutter create --platforms=android,ios --project-name gdgm_schedule --org cn.gdgm.schedule .
 
-      - name: 注入联网权限（WebView 与网络请求需要）
+      - name: 注入联网权限 + 设置应用名 GMPluse
         run: |
           MANIFEST=android/app/src/main/AndroidManifest.xml
           if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
             sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <application#' "$MANIFEST"
           fi
+          sed -i 's#android:label="[^"]*"#android:label="GMPluse"#' "$MANIFEST"
           echo "--- AndroidManifest.xml ---"
           cat "$MANIFEST"
 
       - name: 获取依赖
         run: flutter pub get
+
+      - name: 生成 App 图标（蓝底白校徽）
+        run: dart run flutter_launcher_icons
 
       - name: 修复 inappwebview 在 AGP8 下的 proguard 报错
         run: |
@@ -85,17 +89,22 @@ jobs:
             sed -i '' "s/# platform :ios, '[0-9.]*'/platform :ios, '12.0'/" "$PODFILE" || true
           fi
 
-      - name: 注入 ATS 允许任意网络（修 iOS WebView 因 http 被拦而黑屏）
+      - name: 注入 ATS 允许任意网络 + 设置应用名 GMPluse
         run: |
           PLIST=ios/Runner/Info.plist
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST" || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST" || \
           /usr/libexec/PlistBuddy -c "Set :NSAppTransportSecurity:NSAllowsArbitraryLoads true" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName GMPluse" "$PLIST" || \
+          /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string GMPluse" "$PLIST"
           echo "--- Info.plist ---"
           cat "$PLIST"
 
       - name: 获取依赖
         run: flutter pub get
+
+      - name: 生成 App 图标（蓝底白校徽）
+        run: dart run flutter_launcher_icons
 
       - name: 编译 iOS（不签名）
         run: flutter build ios --release --no-codesign
