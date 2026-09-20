@@ -1,7 +1,7 @@
 name: gdgm_schedule
-description: 广工贸课表 - 查看教务系统课表的 Flutter App (Android/iOS)
+description: GMPluse - 广东工贸职业技术学院校园助手 (Android/iOS)
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: '>=3.5.0 <4.0.0'

@@ -73,10 +73,9 @@ class CasLoginService {
       formData[name] = input.attributes['value'] ?? '';
     }
 
-    // 验证码强制出现则提示走 WebView
-    if (pageHtml.contains('id="cpatchaDiv"') &&
-        !pageHtml.contains('id="cpatchaDiv" style="display: none;"')) {
-      throw CasLoginException('需要验证码，请改用网页登录');
+    // 是否真需要验证码：用 CAS 权威接口判断，而不是猜 HTML
+    if (await _needCaptcha(username)) {
+      throw CasLoginException('该账号当前需要验证码，请改用网页登录');
     }
 
     final salt = _extractSalt(pageHtml);
@@ -115,12 +114,22 @@ class CasLoginService {
       headers: {'Referer': AppConfig.portalUrl},
     ));
 
-    // 4) 再访问一次教务主框架，确保 JSESSIONID 落定
-    await _follow(RequestOptions(
+    // 4) 再访问一次教务主框架，确保 JSESSIONID 落定并验证会话真的有效。
+    //    若 SSO 握手没完成，jw 只会给一个"匿名" JSESSIONID：cookie 有、
+    //    但一请求就被打回登录页。这里必须确认真的落在了教务主框架。
+    final mainResp = await _follow(RequestOptions(
       path: AppConfig.jwMainUrl,
       method: 'GET',
       headers: {'Referer': AppConfig.portalUrl},
     ));
+    final mainUrl = mainResp.realUri.toString();
+    final mainHtml = mainResp.data?.toString() ?? '';
+    final bouncedToLogin = mainUrl.contains('authserver') ||
+        mainUrl.contains('/login') ||
+        mainHtml.contains('用户登录') ||
+        mainHtml.contains('login.jsp');
+    final onJwMain =
+        mainUrl.contains('/jsxsd/') && !bouncedToLogin;
 
     // 5) 导出 jw.gdgm.cn 的 Cookie
     final cookies = await _jar.loadForRequest(Uri.parse(AppConfig.jwHost));
@@ -132,11 +141,16 @@ class CasLoginService {
       for (final t in _trace) {
         debugPrint(t);
       }
+      debugPrint('final jw url: $mainUrl (onJwMain=$onJwMain)');
       debugPrint('jw cookies: $cookieStr');
     }
 
     if (cookieStr.isEmpty || !cookieStr.contains('JSESSIONID')) {
       throw CasLoginException('登录成功但未取得教务会话，请重试或改用网页登录');
+    }
+    if (!onJwMain) {
+      // 有 JSESSIONID 但会话未真正生效（匿名会话），拒绝返回，避免"登进去又被踢"
+      throw CasLoginException('教务会话未生效，请重试或改用网页登录');
     }
     return cookieStr;
   }
@@ -169,6 +183,23 @@ class CasLoginService {
 
   bool _isRedirect(int? s) => s != null && s >= 300 && s < 400;
 
+  /// 查 CAS 是否要求该用户输验证码。接口返回 "true"/"false"。
+  /// 出错时保守返回 false（让登录照常尝试，真要验证码时 POST 会报错兜住）。
+  Future<bool> _needCaptcha(String username) async {
+    try {
+      final url =
+          'https://sfrz.gdgm.cn/authserver/needCaptcha.html?username=$username'
+          '&_=${DateTime.now().millisecondsSinceEpoch}';
+      final resp = await _dio.get<String>(url,
+          options: Options(headers: {'Referer': AppConfig.loginPwdUrl}));
+      final t = (resp.data ?? '').trim().toLowerCase();
+      _trace.add('needCaptcha -> $t');
+      return t.contains('true');
+    } catch (_) {
+      return false;
+    }
+  }
+
   String _encodeForm(Map<String, String> data) => data.entries
       .map((e) =>
           '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}')
@@ -195,6 +226,9 @@ class CasLoginService {
     for (final sel in ['#showErrorTip', '.login-error', '#msg', '.errors']) {
       final t = doc.querySelector(sel)?.text.trim() ?? '';
       if (t.isNotEmpty) return t;
+    }
+    if (html.contains('验证码')) {
+      return '需要验证码，请改用网页登录';
     }
     if (html.contains('用户名或密码') || html.contains('密码错误')) {
       return '用户名或密码错误';

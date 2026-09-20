@@ -45,15 +45,15 @@ class _LoginPageState extends State<LoginPage> {
       return;
     }
 
-    // 阶段2：进入教务主框架
+    // 阶段2：进入教务主框架。
+    // 能落到 xsMain.jsp 就说明 CAS 已放行、jw 会话已建立
+    //（未登录会被 CAS 打回登录页，根本到不了这里）。
+    // 注意：xsMain.jsp 是 frameset，顶层 document 没有正文，
+    // 不能靠"退出/消息通知"字样判断——那会一直判为未登录，导致 cookie 存不上。
     if (_phase == _Phase.jwHandshake) {
       final jwOk =
           AppConfig.loginSuccessMarkers.any((m) => url.contains(m));
       if (!jwOk) return;
-
-      // 确认是已登录的主框架（有"退出/消息通知"字样）
-      final loggedIn = await _pageLooksLoggedIn(c);
-      if (!loggedIn) return;
 
       final cookieManager = CookieManager.instance();
       final cookies = await cookieManager.getCookies(
@@ -62,7 +62,8 @@ class _LoginPageState extends State<LoginPage> {
       final cookieStr =
           cookies.map((ck) => '${ck.name}=${ck.value}').join('; ');
 
-      if (cookieStr.isEmpty) return; // 还没种上，等下一次事件
+      // 必须拿到 jw 的会话票据(JSESSIONID)才算成功，否则等下一次事件
+      if (!cookieStr.contains('JSESSIONID')) return;
 
       _phase = _Phase.done;
       await AuthStore.saveCookie(cookieStr);
@@ -79,7 +80,7 @@ class _LoginPageState extends State<LoginPage> {
         children: [
           Image.asset('assets/icon/app_logo.png', width: 80, height: 80),
           const SizedBox(height: 12),
-          const Text('广工贸课表',
+          const Text('GMPluse',
               style:
                   TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
@@ -114,21 +115,6 @@ class _LoginPageState extends State<LoginPage> {
         ],
       ),
     );
-  }
-
-  /// 用 JS 检查页面是否包含已登录标志（退出按钮 / 消息通知）
-  Future<bool> _pageLooksLoggedIn(InAppWebViewController c) async {
-    try {
-      final r = await c.evaluateJavascript(source: '''
-        (function(){
-          var t = document.body ? document.body.innerText : '';
-          return (t.indexOf('退出') >= 0 || t.indexOf('消息通知') >= 0) ? '1' : '0';
-        })()
-      ''');
-      return r?.toString() == '1';
-    } catch (_) {
-      return false;
-    }
   }
 
   @override

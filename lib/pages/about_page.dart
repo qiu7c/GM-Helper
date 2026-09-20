@@ -5,7 +5,8 @@ import 'package:flutter/services.dart';
 class AboutPage extends StatelessWidget {
   const AboutPage({super.key});
 
-  static const String version = '1.0.0';
+  static const String version = '1.0.1';
+  static const String author = 'cc';
   static const String email = 'xcc575838@gmail.com';
   static const String qq = '921569084';
 
@@ -25,10 +26,15 @@ class AboutPage extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           const Center(
-            child: Text('广工贸课表 · 版本 $version',
+            child: Text('版本 $version',
                 style: TextStyle(color: Colors.grey)),
           ),
           const SizedBox(height: 32),
+          const ListTile(
+            leading: Icon(Icons.person_outline),
+            title: Text('作者'),
+            trailing: Text(author),
+          ),
           _copyTile(context, Icons.email_outlined, '邮箱', email),
           _copyTile(context, Icons.chat_bubble_outline, 'QQ', qq),
           const ListTile(
@@ -52,11 +58,26 @@ class AboutPage extends StatelessWidget {
                     color: Colors.grey)),
           ),
           const Padding(
-            padding: EdgeInsets.fromLTRB(16, 0, 16, 24),
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
             child: Text(
               '本应用仅供自己使用，用于查看个人课表，不用于任何商业用途。'
               '课表及学籍数据均来自广东工贸职业技术学院教务系统，'
               '仅在本机展示，不上传任何第三方服务器。',
+              style: TextStyle(color: Colors.grey, height: 1.6),
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Text('反馈与建议',
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey)),
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 24),
+            child: Text(
+              '使用中遇到 bug，或想提新功能，都欢迎通过上方的邮箱 / QQ 联系我反馈。',
               style: TextStyle(color: Colors.grey, height: 1.6),
             ),
           ),

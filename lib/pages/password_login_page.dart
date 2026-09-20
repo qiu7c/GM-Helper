@@ -99,7 +99,7 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
             ),
             const SizedBox(height: 8),
             const Center(
-              child: Text('广工贸课表',
+              child: Text('GMPluse',
                   style:
                       TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
             ),

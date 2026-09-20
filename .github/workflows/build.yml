@@ -122,3 +122,59 @@ jobs:
         with:
           name: gdgm-schedule-ipa-unsigned
           path: build/ios/iphoneos/app-unsigned.ipa
+
+  # ---------- 发布 Release（APK + 未签名 IPA）----------
+  release:
+    needs: [ build-android, build-ios ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # 允许创建 Release / 打 tag
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 读取版本号
+        id: ver
+        run: |
+          # 从 pubspec.yaml 取 version（形如 1.0.1+2，取 + 前面部分）
+          V=$(grep '^version:' pubspec.yaml | sed 's/version:[[:space:]]*//' | cut -d'+' -f1)
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "解析到版本：$V"
+
+      - name: 下载 APK 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: gdgm-schedule-apk
+          path: dist
+
+      - name: 下载 IPA 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: gdgm-schedule-ipa-unsigned
+          path: dist
+
+      - name: 重命名产物（带版本号）
+        run: |
+          cd dist
+          ls -al
+          mv app-release.apk "GMPluse-v${{ steps.ver.outputs.version }}.apk"
+          mv app-unsigned.ipa "GMPluse-v${{ steps.ver.outputs.version }}-unsigned.ipa"
+          ls -al
+
+      - name: 创建 / 更新 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: GMPluse v${{ steps.ver.outputs.version }}
+          body: |
+            GMPluse v${{ steps.ver.outputs.version }}
+
+            - Android：下载 `GMPluse-v${{ steps.ver.outputs.version }}.apk` 直接安装
+            - iOS：下载 `GMPluse-v${{ steps.ver.outputs.version }}-unsigned.ipa`，用 TrollStore / AltStore / Sideloadly 侧载自签
+
+            > iOS 为未签名包，需自行侧载。
+          files: |
+            dist/GMPluse-v${{ steps.ver.outputs.version }}.apk
+            dist/GMPluse-v${{ steps.ver.outputs.version }}-unsigned.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

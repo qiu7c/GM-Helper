@@ -30,7 +30,19 @@ class _ProfilePageState extends State<ProfilePage> {
   @override
   void initState() {
     super.initState();
+    // 在别的页面登录/退出后，切回本页时自动重新检查
+    AuthStore.authRevision.addListener(_onAuthChanged);
     _check();
+  }
+
+  @override
+  void dispose() {
+    AuthStore.authRevision.removeListener(_onAuthChanged);
+    super.dispose();
+  }
+
+  void _onAuthChanged() {
+    if (mounted) _check();
   }
 
   Future<void> _check() async {

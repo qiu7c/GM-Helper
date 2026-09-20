@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 负责持久化会话 Cookie 及用户上次选择
@@ -9,10 +10,15 @@ class AuthStore {
   static const _kFirstMonday = 'term_first_monday';
   static const _kTotalWeeks = 'term_total_weeks';
 
+  /// 登录状态变更通知：saveCookie / clear 后自增，
+  /// 供「我的」等页面监听后重新检查，避免切页时还显示旧的未登录状态。
+  static final ValueNotifier<int> authRevision = ValueNotifier(0);
+
   /// 保存登录后抓取到的 Cookie 字符串（形如 "JSESSIONID=xxx; ..."）
   static Future<void> saveCookie(String cookie) async {
     final sp = await SharedPreferences.getInstance();
     await sp.setString(_kCookie, cookie);
+    authRevision.value++;
   }
 
   static Future<String?> getCookie() async {
@@ -23,6 +29,7 @@ class AuthStore {
   static Future<void> clear() async {
     final sp = await SharedPreferences.getInstance();
     await sp.remove(_kCookie);
+    authRevision.value++;
   }
 
   static Future<bool> isLoggedIn() async {

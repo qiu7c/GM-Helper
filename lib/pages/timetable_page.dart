@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../config.dart';
 import '../models/course.dart';
 import '../services/auth_store.dart';
+import '../services/course_notes.dart';
 import '../services/schedule_prefs.dart';
 import '../services/schedule_service.dart';
 import '../widgets/course_colors.dart';
@@ -31,13 +32,20 @@ class _TimetablePageState extends State<TimetablePage> {
     _week = SchedulePrefs.instance.currentWeek();
     // 「我的」页改学期/校区后，自动重载
     SchedulePrefs.instance.revision.addListener(_onPrefsChanged);
+    // 备注改动后重绘角标
+    CourseNotes.instance.revision.addListener(_onNotesChanged);
     _load();
   }
 
   @override
   void dispose() {
     SchedulePrefs.instance.revision.removeListener(_onPrefsChanged);
+    CourseNotes.instance.revision.removeListener(_onNotesChanged);
     super.dispose();
+  }
+
+  void _onNotesChanged() {
+    if (mounted) setState(() {});
   }
 
   void _onPrefsChanged() {
@@ -267,9 +275,72 @@ class _TimetablePageState extends State<TimetablePage> {
         courses: _visibleCourses,
         week: _week,
         onTap: _showCourseDetail,
+        onLongPress: _editNote,
         campusId: _campus,
       ),
     );
+  }
+
+  /// 长按课程：编辑长期备注（按课程名保存，跨周次生效）
+  Future<void> _editNote(Course c) async {
+    final ctrl = TextEditingController(
+        text: CourseNotes.instance.noteOf(c.name) ?? '');
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: Row(
+          children: [
+            Container(
+              width: 6,
+              height: 20,
+              decoration: BoxDecoration(
+                color: CourseColors.of(c.name),
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(c.name,
+                  style: const TextStyle(fontSize: 16),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis),
+            ),
+          ],
+        ),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLines: 3,
+          maxLength: 100,
+          decoration: const InputDecoration(
+            hintText: '给这门课加个备注，比如「带课本」「机房上课」',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          if (CourseNotes.instance.hasNote(c.name))
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx, '__delete__'),
+              child: const Text('删除', style: TextStyle(color: Colors.redAccent)),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogCtx, ctrl.text),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (result == null) return; // 取消
+    if (result == '__delete__') {
+      await CourseNotes.instance.clearNote(c.name);
+    } else {
+      await CourseNotes.instance.setNote(c.name, result);
+    }
   }
 
   void _showCourseDetail(Course c) {
@@ -298,9 +369,42 @@ class _TimetablePageState extends State<TimetablePage> {
                       style: const TextStyle(
                           fontSize: 20, fontWeight: FontWeight.bold)),
                 ),
+                IconButton(
+                  tooltip: '备注',
+                  icon: Icon(
+                    CourseNotes.instance.hasNote(c.name)
+                        ? Icons.edit_note
+                        : Icons.note_add_outlined,
+                    color: Colors.grey,
+                  ),
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _editNote(c);
+                  },
+                ),
               ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 8),
+            if (CourseNotes.instance.noteOf(c.name) != null) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: CourseColors.of(c.name).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.push_pin, size: 16, color: CourseColors.of(c.name)),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(CourseNotes.instance.noteOf(c.name)!)),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+            ] else
+              const SizedBox(height: 8),
             _detailRow(Icons.person, '教师', c.teacher),
             _detailRow(Icons.room, '教室', c.room),
             _detailRow(Icons.group, '教学班', c.teachingClass),
@@ -335,12 +439,14 @@ class _TimetableGrid extends StatelessWidget {
   final List<Course> courses;
   final int week;
   final void Function(Course) onTap;
+  final void Function(Course) onLongPress;
   final String? campusId;
 
   const _TimetableGrid({
     required this.courses,
     required this.week,
     required this.onTap,
+    required this.onLongPress,
     this.campusId,
   });
 
@@ -468,10 +574,12 @@ class _TimetableGrid extends StatelessWidget {
 
   Widget _courseBox(Course c, {required bool multi}) {
     final color = CourseColors.of(c.name);
+    final note = CourseNotes.instance.noteOf(c.name);
     return Padding(
       padding: EdgeInsets.only(bottom: multi ? 3 : 0),
       child: InkWell(
         onTap: () => onTap(c),
+        onLongPress: () => onLongPress(c),
         borderRadius: BorderRadius.circular(8),
         child: Container(
           constraints: BoxConstraints(minHeight: multi ? 44 : 92),
@@ -487,34 +595,62 @@ class _TimetableGrid extends StatelessWidget {
               ),
             ],
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Stack(
             children: [
-              Text(
-                c.name,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                    height: 1.2),
-                maxLines: multi ? 2 : 3,
-                overflow: TextOverflow.ellipsis,
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    c.name,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        height: 1.2),
+                    maxLines: multi ? 2 : 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 3),
+                  if (c.room.isNotEmpty)
+                    Text(
+                      '@${c.room}',
+                      style: const TextStyle(color: Colors.white, fontSize: 10),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  if (c.teacher.isNotEmpty && !multi)
+                    Text(
+                      c.teacher,
+                      style: const TextStyle(color: Colors.white70, fontSize: 10),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  if (note != null && !multi) ...[
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        const Icon(Icons.push_pin, size: 9, color: Colors.white),
+                        const SizedBox(width: 2),
+                        Expanded(
+                          child: Text(
+                            note,
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 9, height: 1.1),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
               ),
-              const SizedBox(height: 3),
-              if (c.room.isNotEmpty)
-                Text(
-                  '@${c.room}',
-                  style: const TextStyle(color: Colors.white, fontSize: 10),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              if (c.teacher.isNotEmpty && !multi)
-                Text(
-                  c.teacher,
-                  style:
-                      const TextStyle(color: Colors.white70, fontSize: 10),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+              // 多课叠放时空间小，仅用右上角图钉标记有备注
+              if (note != null && multi)
+                const Positioned(
+                  top: 0,
+                  right: 0,
+                  child: Icon(Icons.push_pin, size: 10, color: Colors.white),
                 ),
             ],
           ),
