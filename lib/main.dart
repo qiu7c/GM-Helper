@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'pages/timetable_page.dart';
+import 'pages/home_shell.dart';
 
 void main() {
   runApp(const ScheduleApp());
@@ -18,7 +18,7 @@ class ScheduleApp extends StatelessWidget {
         colorSchemeSeed: const Color(0xFF5B8FF9),
         useMaterial3: true,
       ),
-      home: const TimetablePage(),
+      home: const HomeShell(),
     );
   }
 }
