@@ -76,6 +76,15 @@ jobs:
             sed -i '' "s/# platform :ios, '[0-9.]*'/platform :ios, '12.0'/" "$PODFILE" || true
           fi
 
+      - name: 注入 ATS 允许任意网络（修 iOS WebView 因 http 被拦而黑屏）
+        run: |
+          PLIST=ios/Runner/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST" || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST" || \
+          /usr/libexec/PlistBuddy -c "Set :NSAppTransportSecurity:NSAllowsArbitraryLoads true" "$PLIST"
+          echo "--- Info.plist ---"
+          cat "$PLIST"
+
       - name: 获取依赖
         run: flutter pub get
 
