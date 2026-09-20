@@ -19,9 +19,15 @@ class AppConfig {
   static const String loginQrUrl =
       'https://sfrz.gdgm.cn/authserver/login?display=qrLogin&$_service';
 
-  /// 教务系统入口。门户登录成功后，用同一 WebView（已持有 SSO Cookie）
-  /// 访问它，CAS 会自动放行并给教务系统种下会话，从而"同一浏览器已登录"。
-  static const String jwEntryUrl = '$jwHost/jsxsd/framework/xsMain.jsp';
+  /// 教务系统入口。门户登录成功后，用同一 WebView（已持有 SSO Cookie）访问
+  /// 门户里的"教务系统"应用入口(appShow)，由它完成 SSO 握手并跳转到教务系统，
+  /// 给 jw.gdgm.cn 种下会话，最终落到 xsMain.jsp。
+  /// 直接访问 jw.gdgm.cn 不一定触发握手，必须走这个 appShow 入口。
+  static const String jwEntryUrl =
+      '$portalUrl/appShow?appId=5759540940956162';
+
+  /// 教务系统最终落地页（用于对照，不直接访问）
+  static const String jwMainUrl = '$jwHost/jsxsd/framework/xsMain.jsp';
 
   /// 学期理论课表接口
   static const String scheduleUrl = '$jwHost/jsxsd/xskb/xskb_list.do';
