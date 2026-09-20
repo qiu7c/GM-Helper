@@ -5,7 +5,7 @@ import '../models/course.dart';
 import '../services/auth_store.dart';
 import '../services/schedule_service.dart';
 import '../widgets/course_colors.dart';
-import 'login_page.dart';
+import 'password_login_page.dart';
 
 class TimetablePage extends StatefulWidget {
   const TimetablePage({super.key});
@@ -83,7 +83,7 @@ class _TimetablePageState extends State<TimetablePage> {
   Future<void> _goLogin() async {
     if (!mounted) return;
     final ok = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => const LoginPage()),
+      MaterialPageRoute(builder: (_) => const PasswordLoginPage()),
     );
     if (ok == true) {
       _load();

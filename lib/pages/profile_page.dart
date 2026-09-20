@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../services/auth_store.dart';
 import '../services/profile_service.dart';
-import 'login_page.dart';
+import 'password_login_page.dart';
 
 /// "我的"页：检查登录状态，展示详细学籍信息，支持退出登录。
 class ProfilePage extends StatefulWidget {
@@ -55,7 +55,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
   Future<void> _login() async {
     final ok = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => const LoginPage()),
+      MaterialPageRoute(builder: (_) => const PasswordLoginPage()),
     );
     if (ok == true) _check();
   }
