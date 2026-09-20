@@ -1,0 +1,95 @@
+name: Build App
+
+# 触发条件：推送到 main/master 分支，或在 Actions 页面手动运行
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  # ---------- 打包 Android APK ----------
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: 显示 Flutter 版本
+        run: flutter --version
+
+      - name: 生成 Android/iOS 原生工程壳
+        run: flutter create --platforms=android,ios --project-name gdgm_schedule --org cn.gdgm.schedule .
+
+      - name: 注入联网权限（WebView 与网络请求需要）
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
+            sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <application#' "$MANIFEST"
+          fi
+          echo "--- AndroidManifest.xml ---"
+          cat "$MANIFEST"
+
+      - name: 获取依赖
+        run: flutter pub get
+
+      - name: 编译 Release APK
+        run: flutter build apk --release
+
+      - name: 上传 APK 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: gdgm-schedule-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+  # ---------- 打包 iOS（未签名，仅用于自行侧载/自签）----------
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: 生成 iOS 原生工程壳
+        run: flutter create --platforms=ios --project-name gdgm_schedule --org cn.gdgm.schedule .
+
+      - name: 设置 iOS 最低版本为 12.0（flutter_inappwebview 要求）
+        run: |
+          PODFILE=ios/Podfile
+          if [ -f "$PODFILE" ]; then
+            sed -i '' "s/# platform :ios, '[0-9.]*'/platform :ios, '12.0'/" "$PODFILE" || true
+          fi
+
+      - name: 获取依赖
+        run: flutter pub get
+
+      - name: 编译 iOS（不签名）
+        run: flutter build ios --release --no-codesign
+
+      - name: 打包为未签名 IPA
+        run: |
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -r Runner.app Payload/
+          zip -r app-unsigned.ipa Payload
+          rm -rf Payload
+
+      - name: 上传 IPA 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: gdgm-schedule-ipa-unsigned
+          path: build/ios/iphoneos/app-unsigned.ipa
