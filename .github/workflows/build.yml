@@ -23,6 +23,7 @@ jobs:
       - name: 安装 Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.19.6'
           channel: stable
 
       - name: 显示 Flutter 版本
@@ -62,6 +63,7 @@ jobs:
       - name: 安装 Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.19.6'
           channel: stable
 
       - name: 生成 iOS 原生工程壳
