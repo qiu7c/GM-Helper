@@ -118,10 +118,37 @@ class _LoginPageState extends State<LoginPage> {
           javaScriptEnabled: true,
           thirdPartyCookiesEnabled: true,
           sharedCookiesEnabled: true,
+          // ↓↓ 修黑屏的关键设置 ↓↓
+          // Android 用混合合成，解决部分机型 WebView 全黑不渲染
+          useHybridComposition: true,
+          // 教务/门户偶有 http 资源，允许混合内容，否则页面部分空白
+          mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
+          // 支持缩放，页面太宽时可放大看清
+          supportZoom: true,
+          builtInZoomControls: true,
+          displayZoomControls: false,
+          useWideViewPort: true,
+          loadWithOverviewMode: true,
+          // iOS 允许内联播放，避免白/黑屏
+          allowsInlineMediaPlayback: true,
+          transparentBackground: false,
         ),
         onWebViewCreated: (c) => _controller = c,
         onProgressChanged: (c, p) {
           setState(() => _progress = p / 100);
+        },
+        onReceivedError: (c, req, err) {
+          // 打印错误便于排查（如证书、网络）
+          debugPrint('WebView error: ${err.type} ${err.description}');
+        },
+        onReceivedHttpError: (c, req, resp) {
+          debugPrint('WebView http error: ${resp.statusCode}');
+        },
+        // 忽略自签名/证书告警，避免因证书问题导致空白
+        onReceivedServerTrustAuthRequest: (c, challenge) async {
+          return ServerTrustAuthResponse(
+            action: ServerTrustAuthResponseAction.PROCEED,
+          );
         },
         onLoadStop: (c, url) async {
           if (url != null) await _onUrl(url.toString(), c);
