@@ -13,65 +13,58 @@ class LoginPage extends StatefulWidget {
   State<LoginPage> createState() => _LoginPageState();
 }
 
+/// 登录分为两个阶段：
+/// 阶段1 - 在统一身份认证(sfrz/authserver)页输账号密码，成功后落到 eportal 门户首页；
+/// 阶段2 - 用同一 WebView（已持有 SSO Cookie）跳转教务系统入口，
+///        CAS 自动放行并给教务系统种下会话，然后抓取教务 Cookie。
+enum _Phase { portalLogin, jwHandshake, done }
+
 class _LoginPageState extends State<LoginPage> {
   InAppWebViewController? _controller;
   double _progress = 0;
-  bool _handled = false;
-
-  /// 是否已经历过登录页（SSO / eportal / 认证服务器）。
-  /// 只有真正经过登录页后落回主框架，才算登录成功——
-  /// 避免刚启动访问主框架被重定向前那一瞬间误判。
-  bool _sawLoginPage = false;
-
-  bool _isLoginUrl(String url) {
-    final u = url.toLowerCase();
-    return u.contains('eportal') ||
-        u.contains('authserver') ||
-        u.contains('login') ||
-        u.contains('cas') ||
-        u.contains('sso');
-  }
+  _Phase _phase = _Phase.portalLogin;
+  String _hint = '请登录统一身份认证';
 
   Future<void> _onUrl(String url, InAppWebViewController c) async {
-    if (_handled) return;
+    if (_phase == _Phase.done) return;
 
-    if (_isLoginUrl(url)) {
-      _sawLoginPage = true;
+    // 阶段1：门户登录成功（落到 eportal 首页）→ 切换去教务系统握手
+    if (_phase == _Phase.portalLogin) {
+      final portalOk =
+          AppConfig.portalSuccessMarkers.any((m) => url.contains(m));
+      if (portalOk) {
+        _phase = _Phase.jwHandshake;
+        setState(() => _hint = '正在进入教务系统…');
+        await c.loadUrl(
+          urlRequest: URLRequest(url: WebUri(AppConfig.jwEntryUrl)),
+        );
+      }
       return;
     }
 
-    // 落地页命中主框架特征
-    final hitMarker =
-        AppConfig.loginSuccessMarkers.any((m) => url.contains(m));
-    if (!hitMarker) return;
+    // 阶段2：进入教务主框架
+    if (_phase == _Phase.jwHandshake) {
+      final jwOk =
+          AppConfig.loginSuccessMarkers.any((m) => url.contains(m));
+      if (!jwOk) return;
 
-    // 二次确认：页面里必须有"退出"按钮，说明确实是已登录的主框架，
-    // 而不是未登录被重定向的中间状态。
-    final loggedIn = await _pageLooksLoggedIn(c);
-    if (!loggedIn) {
-      // 还没真正登录：如果这是启动时的首次访问，等它跳去登录页即可
-      return;
+      // 确认是已登录的主框架（有"退出/消息通知"字样）
+      final loggedIn = await _pageLooksLoggedIn(c);
+      if (!loggedIn) return;
+
+      final cookieManager = CookieManager.instance();
+      final cookies = await cookieManager.getCookies(
+        url: WebUri(AppConfig.jwHost),
+      );
+      final cookieStr =
+          cookies.map((ck) => '${ck.name}=${ck.value}').join('; ');
+
+      if (cookieStr.isEmpty) return; // 还没种上，等下一次事件
+
+      _phase = _Phase.done;
+      await AuthStore.saveCookie(cookieStr);
+      if (mounted) Navigator.of(context).pop(true);
     }
-
-    // 且必须经历过登录页（防止旧会话残留时的误判）
-    if (!_sawLoginPage) return;
-
-    _handled = true;
-
-    final cookieManager = CookieManager.instance();
-    final cookies = await cookieManager.getCookies(
-      url: WebUri(AppConfig.jwHost),
-    );
-    final cookieStr =
-        cookies.map((ck) => '${ck.name}=${ck.value}').join('; ');
-
-    if (cookieStr.isEmpty) {
-      _handled = false;
-      return;
-    }
-
-    await AuthStore.saveCookie(cookieStr);
-    if (mounted) Navigator.of(context).pop(true);
   }
 
   /// 用 JS 检查页面是否包含已登录标志（退出按钮 / 消息通知）
@@ -93,7 +86,7 @@ class _LoginPageState extends State<LoginPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('登录教务系统'),
+        title: Text(_hint),
         actions: [
           IconButton(
             tooltip: '刷新',
