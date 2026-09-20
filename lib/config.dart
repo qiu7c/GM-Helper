@@ -6,12 +6,18 @@ class AppConfig {
   /// 统一身份认证门户
   static const String portalUrl = 'https://eportal.gdgm.cn';
 
-  /// 统一身份认证登录入口（CAS）。用户在这里输账号密码。
-  /// 登录成功后 CAS 会带票据跳回 eportal 门户首页。
-  static const String loginStartUrl =
-      'https://sfrz.gdgm.cn/authserver/login'
-      '?service=https%3A%2F%2Feportal.gdgm.cn%2Flogin'
+  /// CAS 认证的 service 回调（编码后）
+  static const String _service =
+      'service=https%3A%2F%2Feportal.gdgm.cn%2Flogin'
       '%3Fservice%3Dhttps%3A%2F%2Feportal.gdgm.cn%2Fnew%2Findex.html%3Fbrowser%3Dno';
+
+  /// 账号密码登录入口
+  static const String loginPwdUrl =
+      'https://sfrz.gdgm.cn/authserver/login?$_service';
+
+  /// 企业微信扫码登录入口
+  static const String loginQrUrl =
+      'https://sfrz.gdgm.cn/authserver/login?display=qrLogin&$_service';
 
   /// 教务系统入口。门户登录成功后，用同一 WebView（已持有 SSO Cookie）
   /// 访问它，CAS 会自动放行并给教务系统种下会话，从而"同一浏览器已登录"。

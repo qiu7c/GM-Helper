@@ -25,6 +25,9 @@ class _LoginPageState extends State<LoginPage> {
   _Phase _phase = _Phase.portalLogin;
   String _hint = '请登录统一身份认证';
 
+  /// 用户选择的登录方式对应的起始地址；为 null 时显示登录方式选择界面
+  String? _startUrl;
+
   Future<void> _onUrl(String url, InAppWebViewController c) async {
     if (_phase == _Phase.done) return;
 
@@ -67,6 +70,52 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
+  /// 登录方式选择界面
+  Widget _buildMethodPicker() {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.school, size: 72, color: Color(0xFF5B8FF9)),
+          const SizedBox(height: 12),
+          const Text('广工贸课表',
+              style:
+                  TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          const Text('请选择登录方式',
+              style: TextStyle(color: Colors.grey)),
+          const SizedBox(height: 32),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              icon: const Icon(Icons.password),
+              label: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 14),
+                child: Text('账号密码登录', style: TextStyle(fontSize: 16)),
+              ),
+              onPressed: () =>
+                  setState(() => _startUrl = AppConfig.loginPwdUrl),
+            ),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              icon: const Icon(Icons.qr_code_2),
+              label: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 14),
+                child: Text('企业微信扫码登录', style: TextStyle(fontSize: 16)),
+              ),
+              onPressed: () =>
+                  setState(() => _startUrl = AppConfig.loginQrUrl),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// 用 JS 检查页面是否包含已登录标志（退出按钮 / 消息通知）
   Future<bool> _pageLooksLoggedIn(InAppWebViewController c) async {
     try {
@@ -84,10 +133,29 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
+    // 未选择登录方式：先展示选择界面
+    if (_startUrl == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('选择登录方式')),
+        body: _buildMethodPicker(),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_hint),
         actions: [
+          IconButton(
+            tooltip: '换登录方式',
+            icon: const Icon(Icons.swap_horiz),
+            onPressed: () {
+              setState(() {
+                _startUrl = null;
+                _phase = _Phase.portalLogin;
+                _hint = '请登录统一身份认证';
+              });
+            },
+          ),
           IconButton(
             tooltip: '刷新',
             icon: const Icon(Icons.refresh),
@@ -102,8 +170,9 @@ class _LoginPageState extends State<LoginPage> {
             : null,
       ),
       body: InAppWebView(
+        key: ValueKey(_startUrl),
         initialUrlRequest:
-            URLRequest(url: WebUri(AppConfig.loginStartUrl)),
+            URLRequest(url: WebUri(_startUrl!)),
         initialSettings: InAppWebViewSettings(
           userAgent:
               'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 '
