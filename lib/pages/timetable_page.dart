@@ -171,6 +171,7 @@ class _TimetablePageState extends State<TimetablePage> {
       child: _TimetableGrid(
         courses: _visibleCourses,
         onTap: _showCourseDetail,
+        campusId: _campus,
       ),
     );
   }
@@ -313,8 +314,13 @@ class _TimetablePageState extends State<TimetablePage> {
 class _TimetableGrid extends StatelessWidget {
   final List<Course> courses;
   final void Function(Course) onTap;
+  final String? campusId; // 当前校区，用于显示对应的大节时间
 
-  const _TimetableGrid({required this.courses, required this.onTap});
+  const _TimetableGrid({
+    required this.courses,
+    required this.onTap,
+    this.campusId,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -376,7 +382,7 @@ class _TimetableGrid extends StatelessWidget {
                                   fontWeight: FontWeight.bold)),
                           const SizedBox(height: 2),
                           Text(
-                            AppConfig.periodTimes[p - 1],
+                            AppConfig.periodTime(campusId, p),
                             textAlign: TextAlign.center,
                             style: const TextStyle(
                                 fontSize: 9, color: Colors.grey, height: 1.2),

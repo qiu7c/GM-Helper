@@ -61,15 +61,56 @@ class AppConfig {
     '第六大节',
   ];
 
-  /// 大节对应的时间（可按学校作息调整，仅用于展示）
+  /// 各校区 kbjcmsid（时间模式 id），来自教务课表页的下拉选项
+  static const String campusTianhe = '3589FB3E8AD246BCBAD7BB5C8710D078';
+  static const String campusLiwan = '0A10E5C18E814AEAA9456E91A7092394';
+  static const String campusBaiyun = '29637FA5710B46F3B01242A09D7E9CCD';
+
+  /// 各校区大节时间（每格 = 首小节开始 ~ 次小节结束）。
+  /// 荔湾校区无第六大节，用空字符串占位。
+  static const Map<String, List<String>> campusPeriodTimes = {
+    campusTianhe: [
+      '08:00\n09:40',
+      '10:00\n11:40',
+      '14:00\n15:35',
+      '15:55\n17:30',
+      '18:50\n20:30',
+      '20:40\n21:25',
+    ],
+    campusBaiyun: [
+      '08:30\n10:05',
+      '10:25\n12:00',
+      '14:00\n15:35',
+      '15:55\n17:30',
+      '19:00\n20:35',
+      '20:40\n21:25',
+    ],
+    campusLiwan: [
+      '08:30\n10:05',
+      '10:25\n12:00',
+      '14:00\n15:35',
+      '15:55\n17:30',
+      '19:00\n20:35',
+      '', // 荔湾无第六大节
+    ],
+  };
+
+  /// 默认时间（校区未知时用天河）
   static const List<String> periodTimes = [
-    '08:20\n09:55',
-    '10:15\n11:50',
+    '08:00\n09:40',
+    '10:00\n11:40',
     '14:00\n15:35',
     '15:55\n17:30',
-    '18:30\n20:05',
-    '20:15\n21:50',
+    '18:50\n20:30',
+    '20:40\n21:25',
   ];
+
+  /// 取某校区某大节(1..6)的时间，无匹配则回退默认
+  static String periodTime(String? campusId, int period) {
+    final list = campusPeriodTimes[campusId] ?? periodTimes;
+    if (period < 1 || period > list.length) return '';
+    return list[period - 1];
+  }
 
   static const List<String> weekDayNames = [
     '周一',
