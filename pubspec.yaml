@@ -4,15 +4,14 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.3.0 <4.0.0'
+  sdk: '>=3.5.0 <4.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
   # 内嵌 WebView 完成 SSO 登录并抓取会话 Cookie
-  # 固定 6.0.0：兼容 Flutter 3.19.6(Dart 3.3.4)，且配合 AGP7 无 proguard 报错
-  flutter_inappwebview: 6.0.0
+  flutter_inappwebview: ^6.1.5
   # 带 Cookie 请求课表接口
   dio: ^5.7.0
   # 解析教务系统返回的 HTML 表格

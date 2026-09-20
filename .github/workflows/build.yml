@@ -23,7 +23,7 @@ jobs:
       - name: 安装 Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.19.6'
+          flutter-version: '3.24.5'
           channel: stable
 
       - name: 显示 Flutter 版本
@@ -44,6 +44,15 @@ jobs:
       - name: 获取依赖
         run: flutter pub get
 
+      - name: 修复 inappwebview 在 AGP8 下的 proguard 报错
+        run: |
+          # 新版 AGP 不再允许 getDefaultProguardFile('proguard-android.txt')，
+          # 把插件里的引用替换为 optimize 版即可。
+          for f in $(grep -rl "getDefaultProguardFile('proguard-android.txt')" ~/.pub-cache/hosted/pub.dev/flutter_inappwebview_android-*/android/ 2>/dev/null); do
+            echo "patching $f"
+            sed -i "s/getDefaultProguardFile('proguard-android.txt')/getDefaultProguardFile('proguard-android-optimize.txt')/g" "$f"
+          done
+
       - name: 编译 Release APK
         run: flutter build apk --release
 
@@ -63,7 +72,7 @@ jobs:
       - name: 安装 Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.19.6'
+          flutter-version: '3.24.5'
           channel: stable
 
       - name: 生成 iOS 原生工程壳
