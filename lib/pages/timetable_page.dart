@@ -318,12 +318,11 @@ class _TimetableGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 用 map[period][day] 取课程
-    Course? at(int period, int day) {
-      for (final c in courses) {
-        if (c.period == period && c.day == day) return c;
-      }
-      return null;
+    // 同一时间格可能有多门课（单双周/合班），全部取出而不是只取第一门
+    List<Course> at(int period, int day) {
+      return courses
+          .where((c) => c.period == period && c.day == day)
+          .toList();
     }
 
     const timeColWidth = 44.0;
@@ -399,20 +398,34 @@ class _TimetableGrid extends StatelessWidget {
     });
   }
 
-  Widget _cell(BuildContext context, Course? c) {
-    if (c == null) {
+  Widget _cell(BuildContext context, List<Course> list) {
+    if (list.isEmpty) {
       return Container(
         margin: const EdgeInsets.all(1.5),
         constraints: const BoxConstraints(minHeight: 90),
       );
     }
-    final color = CourseColors.of(c.name);
+    // 同格多门课：上下平分堆叠
     return Padding(
       padding: const EdgeInsets.all(1.5),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final c in list)
+            Expanded(child: _courseBox(c, multi: list.length > 1)),
+        ],
+      ),
+    );
+  }
+
+  Widget _courseBox(Course c, {required bool multi}) {
+    final color = CourseColors.of(c.name);
+    return Padding(
+      padding: EdgeInsets.only(bottom: multi ? 2 : 0),
       child: InkWell(
         onTap: () => onTap(c),
         child: Container(
-          constraints: const BoxConstraints(minHeight: 90),
+          constraints: BoxConstraints(minHeight: multi ? 44 : 90),
           padding: const EdgeInsets.all(4),
           decoration: BoxDecoration(
             color: color.withOpacity(0.85),
@@ -428,7 +441,7 @@ class _TimetableGrid extends StatelessWidget {
                     fontSize: 11,
                     fontWeight: FontWeight.bold,
                     height: 1.15),
-                maxLines: 3,
+                maxLines: multi ? 2 : 3,
                 overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 2),
@@ -439,7 +452,7 @@ class _TimetableGrid extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-              if (c.teacher.isNotEmpty)
+              if (c.teacher.isNotEmpty && !multi)
                 Text(
                   c.teacher,
                   style: const TextStyle(color: Colors.white70, fontSize: 10),

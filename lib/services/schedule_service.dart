@@ -145,18 +145,25 @@ class ScheduleService {
   List<List<dom.Node>> _splitBlocks(dom.Element div) {
     final blocks = <List<dom.Node>>[];
     List<dom.Node> current = [];
+    // 括号()包裹的是教学班,也是文本节点,不能当新课名;
+    // 只有当前块已含font(课程详情)后再遇新非括号文本,才算下一门课
+    var hasFont = false;
 
     for (final node in div.nodes) {
       final isText = node.nodeType == dom.Node.TEXT_NODE;
       final text = node.text?.trim() ?? '';
       // 纯文本且非空、非 &nbsp;，视为一门新课的课名 -> 开新块
-      final isCourseName =
+      final isCourseNameXX =
           isText && text.isNotEmpty && text != ' ';
-      if (isCourseName && current.isNotEmpty) {
-        blocks.add(current);
+      final isFont = node is dom.Element && node.localName == 'font';
+      final isParen = isText && text.startsWith('(') && text.endsWith(')');
+      if (isCourseNameXX && !isParen && hasFont && current.isNotEmpty) {
+        blocks.add(List.of(current));
         current = [];
+        hasFont = false;
       }
       current.add(node);
+      if (isFont) hasFont = true;
     }
     if (current.isNotEmpty) blocks.add(current);
     return blocks;
