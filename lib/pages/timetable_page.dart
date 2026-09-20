@@ -415,7 +415,7 @@ class _TimetableGrid extends StatelessWidget {
           constraints: const BoxConstraints(minHeight: 90),
           padding: const EdgeInsets.all(4),
           decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.85),
+            color: color.withOpacity(0.85),
             borderRadius: BorderRadius.circular(6),
           ),
           child: Column(
