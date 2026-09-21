@@ -57,8 +57,79 @@ jobs:
             sed -i "s/getDefaultProguardFile('proguard-android.txt')/getDefaultProguardFile('proguard-android-optimize.txt')/g" "$f"
           done
 
+      # 覆盖安装的关键：每次构建都必须用**同一个**密钥签名。
+      # 没有这一步的话 flutter create 生成的 gradle 会用调试签名，而
+      # runner 每次都是新虚拟机、~/.android/debug.keystore 会当场重新随机生成，
+      # 于是每个 APK 签名都不同，Android 判定「包名冲突」拒绝覆盖安装。
+      - name: 配置固定签名
+        run: |
+          KS=.github/keystore/gmpluse.jks
+          if [ ! -f "$KS" ]; then
+            echo "::warning::没有找到 $KS —— 本次用调试签名，这个包**无法**覆盖安装到已装的 App 上。请先跑一次「一次性生成签名密钥」workflow。"
+            exit 0
+          fi
+          # 用绝对路径，免得纠结 storeFile 是相对 android/ 还是 android/app/
+          cat > android/key.properties <<EOF
+          storePassword=gmpluse2026
+          keyPassword=gmpluse2026
+          keyAlias=gmpluse
+          storeFile=$GITHUB_WORKSPACE/$KS
+          EOF
+          python3 - <<'PY'
+          import re
+          p = 'android/app/build.gradle'
+          s = open(p, encoding='utf-8').read()
+          assert 'keystoreProperties' not in s, '已经打过补丁了'
+
+          # 1) 读取 android/key.properties。
+          #    注意不能塞在文件最前面：Gradle 要求 plugins {} 必须是脚本的
+          #    第一条语句（前面只允许 buildscript {}），所以放在 android { 之前。
+          m = re.search(r'\nandroid\s*\{', s)
+          assert m, '没找到 android { 块'
+          s = s[:m.start()] + """
+          def keystoreProperties = new Properties()
+          def keystorePropertiesFile = rootProject.file('key.properties')
+          if (keystorePropertiesFile.exists()) {
+              keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+          }
+          """ + s[m.start():]
+
+          # 2) 在 android {} 开头加一个 release 签名配置。
+          #    Flutter 的模板里没有 signingConfigs 块，所以直接新建一个；
+          #    Groovy DSL 里 signingConfigs {} 调两次是合法的。
+          m2 = re.search(r'\nandroid\s*\{\n', s)
+          assert m2, '没找到 android { 块'
+          s = s[:m2.end()] + """    signingConfigs {
+                  release {
+                      keyAlias keystoreProperties['keyAlias']
+                      keyPassword keystoreProperties['keyPassword']
+                      storeFile keystoreProperties['storeFile'] ? file(keystoreProperties['storeFile']) : null
+                      storePassword keystoreProperties['storePassword']
+                  }
+              }
+
+          """ + s[m2.end():]
+
+          # 3) release 构建改用 release 签名。
+          #    模板里可能是 `signingConfig signingConfigs.debug`，
+          #    新版是 `signingConfig = signingConfigs.debug`，两种都认。
+          s, n = re.subn(r'signingConfig\s*=?\s*signingConfigs\.debug',
+                         'signingConfig = signingConfigs.release', s)
+          assert n == 1, 'signingConfigs.debug 找到 %d 处（应为 1 处），模板可能变了' % n
+
+          open(p, 'w', encoding='utf-8').write(s)
+          print('已把生成的 gradle 换成 release 签名')
+          PY
+
       - name: 编译 Release APK
         run: flutter build apk --release
+
+      # 打印签名指纹：以后每次构建都是同一个值。哪次变了就说明签名又不对了，
+      # 那个包会装不上（也是排查「包名冲突」最快的办法）。
+      - name: 打印 APK 签名指纹
+        run: |
+          keytool -printcert -jarfile build/app/outputs/flutter-apk/app-release.apk \
+            | grep -E '所有者|Owner|SHA256' | head -4
 
       - name: 上传 APK 产物
         uses: actions/upload-artifact@v4

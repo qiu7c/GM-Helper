@@ -23,6 +23,8 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
   final _pwdCtrl = TextEditingController();
   bool _obscure = true;
   bool _loading = false;
+  bool _savePwd = false;
+  bool _autoLogin = false;
   String? _error;
   List<String> _trace = [];
 
@@ -34,7 +36,29 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
 
   Future<void> _prefill() async {
     final u = await AuthStore.getSavedUsername();
-    if (u != null && mounted) _userCtrl.text = u;
+    final savePwd = await AuthStore.getRememberPassword();
+    final auto = await AuthStore.getAutoLogin();
+    final pwd = savePwd ? await AuthStore.getSavedPassword() : null;
+    if (!mounted) return;
+    setState(() {
+      if (u != null) _userCtrl.text = u;
+      if (pwd != null) _pwdCtrl.text = pwd;
+      _savePwd = savePwd;
+      _autoLogin = auto && savePwd; // 不存密码就谈不上自动登录
+    });
+  }
+
+  /// 登录成功后落盘：勾了才存密码，没勾就把旧的清掉。
+  /// 只在成功后写，避免把打错的密码存下来。
+  Future<void> _persistCredentials(String user, String pwd) async {
+    await AuthStore.saveUsername(user);
+    await AuthStore.saveRememberPassword(_savePwd);
+    if (_savePwd) {
+      await AuthStore.savePassword(pwd);
+    } else {
+      await AuthStore.clearSavedPassword();
+    }
+    await AuthStore.saveAutoLogin(_autoLogin && _savePwd);
   }
 
   @override
@@ -44,7 +68,9 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
     super.dispose();
   }
 
-  /// 主路径：交给 WebView 自动填充并提交（模拟人输入）
+  /// 主路径：交给 WebView 自动填充并提交（模拟人输入）。
+  /// 全程只显示"转圈"的框；账号密码错会带着原因退回来在这里原地提示，
+  /// 只有出现验证码才把网页露出来让用户接管。
   Future<void> _submit() async {
     final user = _userCtrl.text.trim();
     final pwd = _pwdCtrl.text;
@@ -57,15 +83,20 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
       _trace = [];
     });
 
-    final ok = await Navigator.of(context).push<bool>(
+    final res = await Navigator.of(context).push<LoginResult>(
       MaterialPageRoute(
         builder: (_) => LoginPage(autoUsername: user, autoPassword: pwd),
       ),
     );
-    if (ok == true) {
-      await AuthStore.saveUsername(user);
-      if (mounted) Navigator.of(context).pop(true);
+    if (!mounted) return;
+    if (res == null) return; // 用户自己按返回
+    if (!res.ok) {
+      // 账号密码错之类：原地提示，不存这份错的凭证
+      setState(() => _error = res.message ?? '登录失败，请重试');
+      return;
     }
+    await _persistCredentials(user, pwd);
+    if (mounted) Navigator.of(context).pop(true);
   }
 
   /// 备用路径：不打开网页，用 HTTP 直接走一遍 CAS
@@ -85,7 +116,7 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
     try {
       final cookie = await service.login(user, pwd);
       await AuthStore.saveCookie(cookie);
-      await AuthStore.saveUsername(user);
+      await _persistCredentials(user, pwd);
       if (mounted) Navigator.of(context).pop(true);
     } on CasLoginException catch (e) {
       if (mounted) {
@@ -159,6 +190,55 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
                 ),
               ),
             ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Expanded(
+                  child: CheckboxListTile(
+                    value: _savePwd,
+                    onChanged: _loading
+                        ? null
+                        : (v) => setState(() {
+                              _savePwd = v ?? false;
+                              // 不保存密码就无从自动登录
+                              if (!_savePwd) _autoLogin = false;
+                            }),
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: const Text('保存密码',
+                        style: TextStyle(fontSize: 14)),
+                  ),
+                ),
+                Expanded(
+                  child: CheckboxListTile(
+                    value: _autoLogin,
+                    onChanged: _loading
+                        ? null
+                        : (v) => setState(() {
+                              _autoLogin = v ?? false;
+                              // 自动登录依赖已存的密码，顺手把「保存密码」也勾上
+                              if (_autoLogin) _savePwd = true;
+                            }),
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: const Text('自动登录',
+                        style: TextStyle(fontSize: 14)),
+                  ),
+                ),
+              ],
+            ),
+            if (_savePwd)
+              const Padding(
+                padding: EdgeInsets.only(left: 4, bottom: 8),
+                child: Text(
+                  '密码保存在本机 App 私有目录（明文，与会话 Cookie 同级）；'
+                  '未越狱 / 未 root 的设备上其它应用读不到。',
+                  style: TextStyle(fontSize: 11, color: Colors.grey, height: 1.4),
+                ),
+              ),
+            const SizedBox(height: 4),
             if (_error != null) ...[
               const SizedBox(height: 16),
               Text(_error!,
@@ -201,9 +281,11 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 4),
               child: Text(
-                '登录时会短暂显示认证网页，出现验证码请在页面上输入。',
+                '登录全程只显示进度，不会露出网页；\n'
+                '只有需要输入验证码时才切到认证页面。\n'
+                '勾选「自动登录」后，登录态过期时会在启动时自动登一次。',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 12, color: Colors.grey),
+                style: TextStyle(fontSize: 12, color: Colors.grey, height: 1.5),
               ),
             ),
             const SizedBox(height: 8),

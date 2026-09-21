@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../models/course.dart';
 import '../services/auth_store.dart';
+import '../services/auto_login.dart';
 import '../services/profile_service.dart';
 import '../services/schedule_prefs.dart';
 import '../services/schedule_service.dart';
 import 'about_page.dart';
-import 'password_login_page.dart';
 
 /// "我的"页：检查登录状态，展示详细学籍信息，选择学期/校区，退出登录。
 class ProfilePage extends StatefulWidget {
@@ -45,10 +45,16 @@ class _ProfilePageState extends State<ProfilePage> {
     if (mounted) _check();
   }
 
+  /// 检查轮次：登录成功会同时从好几条路触发 _check（监听 + 登录页回调），
+  /// 只认最新那次的结果，避免旧响应把新数据盖回去。
+  int _checkSeq = 0;
+
   Future<void> _check() async {
+    final seq = ++_checkSeq;
     setState(() => _status = _Status.checking);
 
     final cookie = await AuthStore.getCookie();
+    if (seq != _checkSeq) return;
     if (cookie == null || cookie.isEmpty) {
       setState(() => _status = _Status.loggedOut);
       return;
@@ -63,7 +69,7 @@ class _ProfilePageState extends State<ProfilePage> {
       );
       final profile = await profileF;
       final schedule = await scheduleF;
-      if (!mounted) return;
+      if (!mounted || seq != _checkSeq) return;
       setState(() {
         _status = _Status.loggedIn;
         _profile = profile;
@@ -74,10 +80,13 @@ class _ProfilePageState extends State<ProfilePage> {
       });
       SchedulePrefs.instance.sync(term: _term, campus: _campus);
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || seq != _checkSeq) return;
       if (e == ProfileService.sessionExpired ||
           e == ScheduleService.sessionExpired) {
+        // 让出这一轮再清 cookie，免得上面那句 _check 重入时又被自己挡掉
+        _checkSeq++;
         await AuthStore.clear();
+        if (!mounted) return;
         setState(() => _status = _Status.loggedOut);
       } else {
         setState(() => _status = _Status.loggedIn);
@@ -86,18 +95,19 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _login() async {
-    final ok = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => const PasswordLoginPage()),
-    );
-    if (ok == true) _check();
+    final ok = await AutoLogin.ensureLoggedIn(context);
+    if (ok) _check();
   }
 
   Future<void> _logout() async {
+    final autoOn = await AutoLogin.isConfigured();
+    if (!mounted) return;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('退出登录'),
-        content: const Text('确定要退出登录吗？退出后需重新登录才能查看课表。'),
+        content: Text('确定要退出登录吗？退出后需重新登录才能查看课表。'
+            '${autoOn ? '\n\n已开启「自动登录」，本次使用期间不会自动登回去，但下次打开 App 仍会自动登录。' : ''}'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -110,6 +120,9 @@ class _ProfilePageState extends State<ProfilePage> {
     );
     if (confirm == true) {
       await AuthStore.clear();
+      // 刚点完退出就被自动登回去太别扭：本次启动内不再自动登录
+      AutoLogin.suppress();
+      if (!mounted) return;
       setState(() {
         _status = _Status.loggedOut;
         _profile = null;

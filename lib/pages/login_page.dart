@@ -13,7 +13,26 @@ import '../services/auth_store.dart';
 /// 等价于"模拟人手动输入再提交"。密码加密、302 跳转、Cookie 种下
 /// 全部由浏览器内核完成，比用 Dart 重写一套 CAS 可靠得多。
 ///
-/// 页面保持可见可交互：万一跳出验证码，用户直接在网页上输入即可接管。
+/// 自动模式下网页默认是**被盖住**的，只显示一个"正在登录"的框。什么情况下
+/// 才把网页露出来，这里分得很细：
+///
+///  - **账号密码错**（`<div class="bh-alert-box">您提供的用户名或者密码有误`）：
+///    这是确定的失败，看网页也没用 —— 直接带着原因退回自绘登录页让用户重输。
+///  - **要验证码**（同一个 `bh-alert-box`，这时它说的是「请输入验证码」）：
+///    只有网页上才能做，必须把网页露出来。
+///  - 自动填充对不上页面结构 / 点了登录迟迟不跳 / 整链超时：露出来让用户接管。
+///
+/// 这个登录页的两个脾气，代码里到处都在迁就：
+///  1. 它是"点了提交才有反应"的老式表单 —— 错误提示、要不要验证码，都得 POST
+///     一次才吐出来。所以填完必须**点按钮**，不能指望页面提前给信号。
+///  2. 但**验证码控件本身是提交前就在页面上的**，所以提交前能先看见它、提前让位；
+///     否则每次都要拿一次注定失败的提交去换那句"请输入验证码"，白费尝试。
+///  3. 密码错的提示和验证码的提示共用 `bh-alert-box` 这一个元素，只能按**文字**
+///     区分，不能按选择器区分；两者同时出现时（密码错很多次之后就是这样）
+///     按验证码处理 —— 那时候密码和验证码都得在网页上改。
+///
+/// 注意遮罩是"盖住"而不是"不渲染"——WebView 必须有真实布局才能执行 JS，
+/// 藏起来（Offstage / 尺寸 0）就没法自动填了。
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key, this.autoUsername, this.autoPassword});
 
@@ -25,6 +44,23 @@ class LoginPage extends StatefulWidget {
 
   @override
   State<LoginPage> createState() => _LoginPageState();
+}
+
+/// 登录页的返回结果。
+///
+/// [ok] 为 true 表示登录成功；否则 [message] 非空时是失败原因（账号密码错等），
+/// 为空表示用户自己按了返回。
+class LoginResult {
+  final bool ok;
+  final String? message;
+
+  const LoginResult.success()
+      : ok = true,
+        message = null;
+  const LoginResult.failed(this.message) : ok = false;
+  const LoginResult.cancelled()
+      : ok = false,
+        message = null;
 }
 
 /// 登录分两个阶段：
@@ -60,17 +96,54 @@ class _LoginPageState extends State<LoginPage> {
   /// 登录页里相关输入框的真实结构（自动填充失败时回显，便于定位问题）
   String _domDump = '';
 
+  /// 网页是否已经露出来。自动模式下初始为 false（只显示"正在登录"的框），
+  /// 一旦自动登录没成功就置为 true，让用户能在网页上手动接管。
+  bool _webVisible = false;
+
+  /// 最近一次拿到的页面地址，用来判断"点了登录却还停在认证页"
+  String _lastUrl = '';
+
+  /// 已经带着结果退出这一页了，避免收尾阶段被重复 pop
+  bool _popped = false;
+
   @override
   void initState() {
     super.initState();
     if (widget.auto) {
       _startUrl = AppConfig.loginPwdUrl;
       _hint = '正在自动登录…';
+      _watchOverall();
     }
   }
 
+  /// 撤掉遮罩，把网页交还给用户（重复调用无副作用）
+  void _reveal({String? hint}) {
+    if (!mounted) return;
+    if (_webVisible && (hint == null || hint == _hint)) return;
+    setState(() {
+      _webVisible = true;
+      if (hint != null) _hint = hint;
+    });
+  }
+
+  /// 账号密码错：看网页也没用，直接带着原因退回自绘登录页，让用户重输。
+  /// 这样"自绘界面 → 转圈 → 密码错了回到自绘界面"是闭环的，全程看不到网页。
+  void _failToSelfDrawn(String message) {
+    if (_popped || !mounted) return;
+    _popped = true;
+    Navigator.of(context).pop<LoginResult>(LoginResult.failed(message));
+  }
+
+  /// 兜底：整条自动登录链路超时还没走完，就把网页露出来，别让用户对着转圈干等
+  Future<void> _watchOverall() async {
+    await Future<void>.delayed(const Duration(seconds: 25));
+    if (!mounted || _popped || _phase == _Phase.done || _webVisible) return;
+    _reveal(hint: '自动登录超时，请在此页面手动登录');
+  }
+
   Future<void> _onUrl(String url, InAppWebViewController c) async {
-    if (_phase == _Phase.done) return;
+    if (_phase == _Phase.done || _popped) return;
+    _lastUrl = url;
 
     // 阶段1：统一身份认证页
     if (_phase == _Phase.login) {
@@ -108,7 +181,9 @@ class _LoginPageState extends State<LoginPage> {
 
       _phase = _Phase.done;
       await AuthStore.saveCookie(cookieStr);
-      if (mounted) Navigator.of(context).pop(true);
+      if (!mounted || _popped) return;
+      _popped = true;
+      Navigator.of(context).pop<LoginResult>(const LoginResult.success());
     }
   }
 
@@ -132,12 +207,13 @@ class _LoginPageState extends State<LoginPage> {
   /// 填完当场回读校验，两格都有值才提交；否则不提交、稍后重试，
   /// 免得拿空密码反复提交把账号锁了。
   Future<void> _autoFill(InAppWebViewController c) async {
-    if (_autoSubmitted || _autoBusy) return;
-    // 重试到头仍没填进去：明确告诉用户手动接管，别让他干等
+    if (_autoSubmitted || _autoBusy || _popped) return;
+    // 重试到头仍没填进去：把网页露出来让用户自己输，别让他对着加载框干等
     if (_autoTries > 8) {
       if (mounted && _phase == _Phase.login && _pageError == null) {
         setState(() => _pageError = '自动填写没生效（$_fillState），'
             '请在页面上手动输入密码后点「登录」。');
+        _reveal(hint: '请手动登录');
       }
       return;
     }
@@ -277,8 +353,37 @@ class _LoginPageState extends State<LoginPage> {
             state = '账号' + (u.value ? u.value.length : 0)
                   + '/密码' + (pv.value ? pv.value.length : 0)
                   + '/密文' + (enc ? (enc.value ? enc.value.length : 0) : -1);
+            // 提交前先看页面上有没有验证码。
+            // 这个登录页是"点了提交才有反应"的老式表单 —— 错误提示、要不要
+            // 验证码，都得 POST 一次才知道。但验证码控件本身是**提交前**就
+            // 摆在页面上的，所以能提前看见：有就别提交了，那次必然不过，
+            // 还白搭一次尝试、把账号继续往"需要验证码"的状态里推。
+            // 账号密码照样填好，用户只要补个验证码再点登录。
+            var capRe = /captcha|validate|checkcode|verifycode|kaptcha|randomcode/i;
+            var needCaptcha = false;
+            var ci;
+            var capImgs = document.querySelectorAll('img');
+            for (ci = 0; ci < capImgs.length; ci++) {
+              var csrc = capImgs[ci].getAttribute('src') || '';
+              if (capRe.test(csrc) && isVisible(capImgs[ci])) {
+                needCaptcha = true; break;
+              }
+            }
+            if (!needCaptcha) {
+              var capIns = document.querySelectorAll('input');
+              for (ci = 0; ci < capIns.length; ci++) {
+                var cid = (capIns[ci].id || '') + ' '
+                        + (capIns[ci].getAttribute('name') || '');
+                if (capRe.test(cid) && isVisible(capIns[ci])) {
+                  needCaptcha = true; break;
+                }
+              }
+            }
+
             if (!okP || !u.value || !pv.value) {
               st = 'PWDFAIL';
+            } else if (needCaptcha) {
+              st = 'CAPTCHA';
             } else {
               var btn = document.querySelector('#loginButton')
                      || document.querySelector('#submitBtn')
@@ -304,6 +409,21 @@ class _LoginPageState extends State<LoginPage> {
       final dump = (res['dump'] ?? '').toString();
       if (dump.isNotEmpty) _domDump = dump;
 
+      // 页面上挂着验证码：这次不提交，账号密码已经填好，把网页交给用户补验证码。
+      // 把 _autoSubmitted 也置上，是为了让 _onUrl 之后走"读页面反馈"而不是
+      // 又回来重新自动填 —— 否则用户填完验证码提交，我们还会再插一手。
+      if (status == 'CAPTCHA') {
+        _autoSubmitted = true;
+        if (mounted) {
+          setState(() {
+            _fillState = (res['state'] ?? '').toString();
+            _pageError = '需要验证码，请在网页上输入后点登录';
+          });
+        }
+        _reveal(hint: '请在网页上输入验证码');
+        return;
+      }
+
       if (status == 'CLICKED') {
         _autoSubmitted = true;
         if (mounted) {
@@ -321,7 +441,7 @@ class _LoginPageState extends State<LoginPage> {
         _fillState = (res['state'] ?? '').toString();
       }
       await Future<void>.delayed(const Duration(milliseconds: 600));
-      if (!mounted || _phase != _Phase.login || _autoSubmitted) return;
+      if (!mounted || _popped || _phase != _Phase.login || _autoSubmitted) return;
       _autoBusy = false;
       await _autoFill(c);
       return;
@@ -332,36 +452,115 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
-  /// 点了登录但迟迟没跳转时，提示用户手动接管
+  /// 提交之后的盯梢：轮询看页面给什么反应。
+  ///
+  /// 不只用 onLoadStop —— 表单 POST 后**地址没变**，页面只是重渲染了一下，
+  /// 弹出来的 `.bh-alert-box` 未必每次都伴随一次可用的 URL 回调，
+  /// 所以这里自己按节奏读几遍，读到结论就提前收工。
   Future<void> _watchStuck() async {
-    await Future<void>.delayed(const Duration(seconds: 6));
-    if (!mounted || _phase != _Phase.login) return;
-    setState(() => _hint = '若没反应，请手动点页面上的「登录」');
+    for (var i = 0; i < 6; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      if (!mounted || _phase != _Phase.login || _popped || _webVisible) return;
+      final c = _controller;
+      if (c == null) return;
+      await _readPageError(c);
+      // 已经有结论了：密码错会 pop 走，验证码已经把网页露出来了
+      if (_popped || _webVisible || _pageError != null) return;
+    }
+    if (!mounted || _phase != _Phase.login || _popped || _webVisible) return;
+    // 还停在认证页上 → 多半是按钮没被认下来，总之自动这条路走不通了
+    if (_lastUrl.contains('/authserver/login')) {
+      _reveal(hint: '请在页面上完成登录');
+    }
   }
 
-  /// 读登录页上的错误提示（账号密码错 / 需要验证码）
+  /// 读登录页给出的反馈，分两类处理（见类注释）。
+  ///
+  /// 密码错的弹窗长这样：
+  ///   `<div class="bh-alert-box" style="top:194px;">您提供的用户名或者密码有误</div>`
   Future<void> _readPageError(InAppWebViewController c) async {
+    String raw;
     try {
-      final err = (await c.evaluateJavascript(source: '''
+      raw = (await c.evaluateJavascript(source: '''
         (function () {
-          var sels = ['#showErrorTip', '.login-error', '#msg', '.errors', '#errorMsg'];
-          for (var i = 0; i < sels.length; i++) {
-            var e = document.querySelector(sels[i]);
-            if (e && e.innerText && e.innerText.trim()) return e.innerText.trim();
+          function txt(el) { return el && el.innerText ? el.innerText.trim() : ''; }
+
+          // 1) 明确的错误弹窗（密码错 / 账号不存在）
+          var box = document.querySelector('.bh-alert-box')
+                 || document.querySelector('#bh-alert-box')
+                 || document.querySelector('#showErrorTip')
+                 || document.querySelector('.login-error')
+                 || document.querySelector('#errorMsg');
+          var msg = txt(box);
+
+          // 2) 有的页面把提示直接写在正文里
+          var body = document.body ? document.body.innerText : '';
+          if (!msg) {
+            var pats = ['用户名或者密码有误', '用户名或密码错误', '账号或密码错误',
+                        '密码错误', '用户名不存在'];
+            for (var i = 0; i < pats.length; i++) {
+              if (body.indexOf(pats[i]) >= 0) { msg = pats[i]; break; }
+            }
           }
-          var t = document.body ? document.body.innerText : '';
-          if (t.indexOf('验证码') >= 0) return '需要验证码，请在页面上输入验证码后点登录';
-          if (t.indexOf('密码') >= 0 && t.indexOf('错误') >= 0) return '用户名或密码错误';
-          return '';
+
+          // 3) 验证码：它是在密码错很多次之后才出现的，出现了就必须人来做
+          var re = /captcha|validate|checkcode|verifycode|kaptcha|randomcode/i;
+          var cap = false;
+          var imgs = document.querySelectorAll('img');
+          for (var i = 0; i < imgs.length; i++) {
+            if (re.test(imgs[i].getAttribute('src') || '')) { cap = true; break; }
+          }
+          if (!cap) {
+            var ins = document.querySelectorAll('input');
+            for (var i = 0; i < ins.length; i++) {
+              var idn = (ins[i].id || '') + ' ' + (ins[i].getAttribute('name') || '');
+              if (re.test(idn)) { cap = true; break; }
+            }
+          }
+          // innerText 不含 display:none 的内容，所以页面上"藏着不用"的验证码
+          // 字样不会误判
+          if (!cap && body.indexOf('验证码') >= 0) cap = true;
+          // 同一个 bh-alert-box，要验证码时它说的是"请输入验证码"。
+          // 弹窗可能是 display:none 弹出的（这时 body.innerText 里没有它），
+          // 所以弹窗自己的文字也得单独看一眼，否则会被当成密码错退回去。
+          if (!cap && msg.indexOf('验证码') >= 0) cap = true;
+
+          return JSON.stringify({ kind: cap ? 'captcha' : (msg ? 'cred' : ''), msg: msg });
         })()
-      '''))?.toString();
-      if (err != null && err.isNotEmpty && err != _pageError) {
-        setState(() {
-          _pageError = err;
-          _hint = '登录失败，请手动处理';
-        });
-      }
-    } catch (_) {}
+      '''))?.toString() ??
+          '';
+    } catch (_) {
+      return;
+    }
+
+    Map<String, dynamic> res;
+    try {
+      res = (jsonDecode(raw) as Map).cast<String, dynamic>();
+    } catch (_) {
+      return;
+    }
+    final kind = (res['kind'] ?? '').toString();
+    final msg = (res['msg'] ?? '').toString();
+    if (kind.isEmpty) return;
+
+    if (!mounted) return;
+
+    if (kind == 'captcha') {
+      const text = '需要验证码，请在网页上输入后点登录';
+      if (_pageError != text) setState(() => _pageError = text);
+      _reveal(hint: '请在网页上输入验证码');
+      return;
+    }
+
+    // 账号密码错。自绘模式下这是确定的失败，没必要让用户看网页 ——
+    // 带着原因退回自绘登录页重输，全程不露出网页。
+    final reason = msg.isEmpty ? '用户名或密码错误' : msg;
+    if (widget.auto) {
+      _failToSelfDrawn(reason);
+    } else {
+      // 手动模式（用户自己选了登录方式进来的）：页面本来就是他的，原地提示即可
+      if (_pageError != reason) setState(() => _pageError = reason);
+    }
   }
 
   /// 取 jw.gdgm.cn 下所有 Cookie。
@@ -385,6 +584,55 @@ class _LoginPageState extends State<LoginPage> {
       } catch (_) {}
     }
     return merged.entries.map((e) => '${e.key}=${e.value}').join('; ');
+  }
+
+  /// 自动登录时盖在网页上的"正在登录"框。
+  ///
+  /// 用遮罩而不是把 WebView 藏起来（Offstage / 尺寸 0）：WebView 必须有真实
+  /// 布局才会执行 JS，藏了就自动填不进去了。这里只是不让用户看到页面本身。
+  Widget _buildLoginCover() {
+    return Positioned.fill(
+      child: ColoredBox(
+        color: Theme.of(context).colorScheme.surface,
+        child: Center(
+          child: Card(
+            elevation: 3,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(36, 28, 36, 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 34,
+                    height: 34,
+                    child: CircularProgressIndicator(strokeWidth: 3),
+                  ),
+                  const SizedBox(height: 18),
+                  const Text('正在登录…',
+                      style: TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 6),
+                  Text(_hint,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                  if (_fillState.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(_fillState,
+                        style: const TextStyle(
+                            fontSize: 11, color: Colors.grey)),
+                  ],
+                  const SizedBox(height: 10),
+                  TextButton(
+                    onPressed: () => _reveal(hint: '请在此页面登录'),
+                    child: const Text('打开网页手动登录'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   /// 登录方式选择界面
@@ -472,109 +720,115 @@ class _LoginPageState extends State<LoginPage> {
               : const SizedBox(height: 3),
         ),
       ),
-      body: Column(
+      body: Stack(
         children: [
-          if (_pageError != null)
-            Container(
-              width: double.infinity,
-              color: Colors.redAccent.withOpacity(0.12),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              child: Row(
-                children: [
-                  const Icon(Icons.error_outline,
-                      size: 18, color: Colors.redAccent),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(_pageError!,
-                        style: const TextStyle(
-                            fontSize: 13, color: Colors.redAccent)),
+          Column(
+            children: [
+              if (_pageError != null)
+                Container(
+                  width: double.infinity,
+                  color: Colors.redAccent.withOpacity(0.12),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.error_outline,
+                          size: 18, color: Colors.redAccent),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(_pageError!,
+                            style: const TextStyle(
+                                fontSize: 13, color: Colors.redAccent)),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            )
-          else if (widget.auto)
-            Container(
-              width: double.infinity,
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _autoSubmitted
-                        ? '已自动填入（$_fillState）并提交；若出现验证码，请在页面上输入后点「登录」。'
-                        : '正在自动填入账号密码…（$_fillState）',
-                    style: const TextStyle(fontSize: 13),
-                  ),
-                  // 把登录页真实的输入框结构露出来，便于排错
-                  if (_domDump.isNotEmpty)
-                    ExpansionTile(
-                      tilePadding: EdgeInsets.zero,
-                      dense: true,
-                      title: const Text('查看登录页表单结构（排错用）',
-                          style: TextStyle(fontSize: 12, color: Colors.grey)),
-                      children: [
-                        SelectableText(
-                          _domDump,
-                          style: const TextStyle(
-                              fontSize: 11, fontFamily: 'monospace'),
+                )
+              else if (widget.auto)
+                Container(
+                  width: double.infinity,
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _autoSubmitted
+                            ? '已自动填入（$_fillState）并提交；若出现验证码，请在页面上输入后点「登录」。'
+                            : '正在自动填入账号密码…（$_fillState）',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                      // 把登录页真实的输入框结构露出来，便于排错
+                      if (_domDump.isNotEmpty)
+                        ExpansionTile(
+                          tilePadding: EdgeInsets.zero,
+                          dense: true,
+                          title: const Text('查看登录页表单结构（排错用）',
+                              style: TextStyle(fontSize: 12, color: Colors.grey)),
+                          children: [
+                            SelectableText(
+                              _domDump,
+                              style: const TextStyle(
+                                  fontSize: 11, fontFamily: 'monospace'),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                ],
+                    ],
+                  ),
+                ),
+              Expanded(
+                child: InAppWebView(
+                  key: ValueKey(_startUrl),
+                  initialUrlRequest: URLRequest(url: WebUri(_startUrl!)),
+                  initialSettings: InAppWebViewSettings(
+                    userAgent:
+                        'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 '
+                        '(KHTML, like Gecko) Chrome/120 Mobile Safari/537.36',
+                    javaScriptEnabled: true,
+                    thirdPartyCookiesEnabled: true,
+                    sharedCookiesEnabled: true,
+                    // ↓↓ 修黑屏的关键设置 ↓↓
+                    // Android 用混合合成，解决部分机型 WebView 全黑不渲染
+                    useHybridComposition: true,
+                    // 教务/门户偶有 http 资源，允许混合内容，否则页面部分空白
+                    mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
+                    // 支持缩放，页面太宽时可放大看清
+                    supportZoom: true,
+                    builtInZoomControls: true,
+                    displayZoomControls: false,
+                    useWideViewPort: true,
+                    loadWithOverviewMode: true,
+                    // iOS 允许内联播放，避免白/黑屏
+                    allowsInlineMediaPlayback: true,
+                    transparentBackground: false,
+                  ),
+                  onWebViewCreated: (c) => _controller = c,
+                  onProgressChanged: (c, p) {
+                    setState(() => _progress = p / 100);
+                  },
+                  onReceivedError: (c, req, err) {
+                    // 打印错误便于排查（如证书、网络）
+                    debugPrint('WebView error: ${err.type} ${err.description}');
+                  },
+                  onReceivedHttpError: (c, req, resp) {
+                    debugPrint('WebView http error: ${resp.statusCode}');
+                  },
+                  // 忽略自签名/证书告警，避免因证书问题导致空白
+                  onReceivedServerTrustAuthRequest: (c, challenge) async {
+                    return ServerTrustAuthResponse(
+                      action: ServerTrustAuthResponseAction.PROCEED,
+                    );
+                  },
+                  onLoadStop: (c, url) async {
+                    if (url != null) await _onUrl(url.toString(), c);
+                  },
+                  onUpdateVisitedHistory: (c, url, _) async {
+                    if (url != null) await _onUrl(url.toString(), c);
+                  },
+                ),
               ),
-            ),
-          Expanded(
-            child: InAppWebView(
-              key: ValueKey(_startUrl),
-              initialUrlRequest: URLRequest(url: WebUri(_startUrl!)),
-              initialSettings: InAppWebViewSettings(
-                userAgent:
-                    'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 '
-                    '(KHTML, like Gecko) Chrome/120 Mobile Safari/537.36',
-                javaScriptEnabled: true,
-                thirdPartyCookiesEnabled: true,
-                sharedCookiesEnabled: true,
-                // ↓↓ 修黑屏的关键设置 ↓↓
-                // Android 用混合合成，解决部分机型 WebView 全黑不渲染
-                useHybridComposition: true,
-                // 教务/门户偶有 http 资源，允许混合内容，否则页面部分空白
-                mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
-                // 支持缩放，页面太宽时可放大看清
-                supportZoom: true,
-                builtInZoomControls: true,
-                displayZoomControls: false,
-                useWideViewPort: true,
-                loadWithOverviewMode: true,
-                // iOS 允许内联播放，避免白/黑屏
-                allowsInlineMediaPlayback: true,
-                transparentBackground: false,
-              ),
-              onWebViewCreated: (c) => _controller = c,
-              onProgressChanged: (c, p) {
-                setState(() => _progress = p / 100);
-              },
-              onReceivedError: (c, req, err) {
-                // 打印错误便于排查（如证书、网络）
-                debugPrint('WebView error: ${err.type} ${err.description}');
-              },
-              onReceivedHttpError: (c, req, resp) {
-                debugPrint('WebView http error: ${resp.statusCode}');
-              },
-              // 忽略自签名/证书告警，避免因证书问题导致空白
-              onReceivedServerTrustAuthRequest: (c, challenge) async {
-                return ServerTrustAuthResponse(
-                  action: ServerTrustAuthResponseAction.PROCEED,
-                );
-              },
-              onLoadStop: (c, url) async {
-                if (url != null) await _onUrl(url.toString(), c);
-              },
-              onUpdateVisitedHistory: (c, url, _) async {
-                if (url != null) await _onUrl(url.toString(), c);
-              },
-            ),
+            ],
           ),
+          // 自动模式：网页就绪前一直盖着，只有自动登录没成功才撤掉
+          if (widget.auto && !_webVisible) _buildLoginCover(),
         ],
       ),
     );

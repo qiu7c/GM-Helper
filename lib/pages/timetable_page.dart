@@ -3,11 +3,12 @@ import 'package:flutter/material.dart';
 import '../config.dart';
 import '../models/course.dart';
 import '../services/auth_store.dart';
+import '../services/auto_login.dart';
 import '../services/course_notes.dart';
+import '../services/schedule_cache.dart';
 import '../services/schedule_prefs.dart';
 import '../services/schedule_service.dart';
 import '../widgets/course_colors.dart';
-import 'password_login_page.dart';
 
 class TimetablePage extends StatefulWidget {
   const TimetablePage({super.key});
@@ -26,12 +27,26 @@ class _TimetablePageState extends State<TimetablePage> {
   int _week = 1;
   bool _calendarLoaded = false; // 本会话是否已同步过教务日历
 
+  /// 登录页是否已经打开，避免重复弹（登录状态变化可能同时触发多条路径）
+  bool _loginOpen = false;
+
+  /// 加载轮次：并发/重入时只认最新那次的结果，避免旧响应把新数据盖回去
+  int _loadSeq = 0;
+
+  /// 当前显示的是不是缓存内容（还没刷新成功）
+  bool _fromCache = false;
+
+  /// 有缓存但联网刷新失败了，这里是原因
+  String? _staleReason;
+
   @override
   void initState() {
     super.initState();
     _week = SchedulePrefs.instance.currentWeek();
     // 「我的」页改学期/校区后，自动重载
     SchedulePrefs.instance.revision.addListener(_onPrefsChanged);
+    // 在「我的」页登录/退出后，课表也跟着刷新
+    AuthStore.authRevision.addListener(_onAuthChanged);
     // 备注改动后重绘角标
     CourseNotes.instance.revision.addListener(_onNotesChanged);
     _load();
@@ -40,12 +55,23 @@ class _TimetablePageState extends State<TimetablePage> {
   @override
   void dispose() {
     SchedulePrefs.instance.revision.removeListener(_onPrefsChanged);
+    AuthStore.authRevision.removeListener(_onAuthChanged);
     CourseNotes.instance.revision.removeListener(_onNotesChanged);
     super.dispose();
   }
 
   void _onNotesChanged() {
     if (mounted) setState(() {});
+  }
+
+  /// 登录状态变了：登录成功就重载课表。
+  ///
+  /// 只在"已登录"时重载，退出/失效不在这里处理 —— 那两条路走 _load 自己的
+  /// sessionExpired 分支，否则会和 _goLogin 抢着弹登录页。
+  void _onAuthChanged() {
+    AuthStore.isLoggedIn().then((ok) {
+      if (ok && mounted) _load(keepSelection: true);
+    });
   }
 
   void _onPrefsChanged() {
@@ -56,18 +82,56 @@ class _TimetablePageState extends State<TimetablePage> {
 
   int get _totalWeeks => SchedulePrefs.instance.totalWeeks;
 
+  /// 加载课表：**先铺缓存，再联网刷新**。
+  ///
+  /// 教务系统一次返回整个学期的课表，周次是本地过滤的，所以缓存按
+  /// 「学期+校区」存一份就够，切周次也走同一条路 —— 于是切周次不会再白屏
+  /// 一下，打开 App 也是立刻有内容。
   Future<void> _load({bool keepSelection = false}) async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    final seq = ++_loadSeq;
 
     final cookie = await AuthStore.getCookie();
+    if (seq != _loadSeq) return; // 已有更新的一次加载在跑
     if (cookie == null || cookie.isEmpty) {
       _goLogin();
       return;
     }
 
+    // 先把这次要查的学期/校区定下来：缓存和网络请求用同一套参数，
+    // 否则缓存铺的是 A 学期、网络回的是 B 学期，会闪。
+    final wantTerm =
+        keepSelection ? _term : (_term ?? await AuthStore.getLastTerm());
+    final wantCampus =
+        keepSelection ? _campus : (_campus ?? await AuthStore.getLastCampus());
+    if (seq != _loadSeq) return;
+
+    // 1) 铺缓存。已经显示了同一份内容就不重复读了。
+    final changed = wantTerm != _term || wantCampus != _campus;
+    if (_result == null || changed) {
+      final cached = await ScheduleCache.read(term: wantTerm, campus: wantCampus);
+      if (seq != _loadSeq) return;
+      if (cached != null) {
+        setState(() {
+          _result = cached;
+          _term = cached.selectedTerm ?? wantTerm;
+          _campus = cached.selectedCampus ?? wantCampus;
+          _loading = false;
+          _error = null;
+          _fromCache = true;
+          _staleReason = null; // 刷新还在路上，先显示"正在更新"
+        });
+      }
+    }
+    if (seq != _loadSeq) return;
+    // 有东西可看就不转圈，让内容留在屏幕上等刷新
+    if (_result == null && !_loading) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+
+    // 2) 联网刷新
     try {
       final service = ScheduleService(cookie);
 
@@ -82,48 +146,77 @@ class _TimetablePageState extends State<TimetablePage> {
       }
 
       final result = await service.fetch(
-        term: keepSelection ? _term : (_term ?? await AuthStore.getLastTerm()),
+        term: wantTerm,
         week: _week.toString(),
-        campus: keepSelection
-            ? _campus
-            : (_campus ?? await AuthStore.getLastCampus()),
+        campus: wantCampus,
       );
-      if (!mounted) return;
+      if (!mounted || seq != _loadSeq) return;
       setState(() {
         _result = result;
         _term = result.selectedTerm ?? _term;
         _campus = result.selectedCampus ?? _campus;
         _loading = false;
+        _error = null;
+        _fromCache = false;
+        _staleReason = null;
       });
+      await ScheduleCache.write(term: _term, campus: _campus, result: result);
       if (_term != null) await AuthStore.saveLastTerm(_term!);
       if (_campus != null) await AuthStore.saveLastCampus(_campus!);
       SchedulePrefs.instance.sync(term: _term, campus: _campus);
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || seq != _loadSeq) return;
       if (e == ScheduleService.sessionExpired) {
+        // 先让出这一轮，再弹登录页：否则登录成功后的那次 _load 会被
+        // 自己这轮的 seq 挡掉
+        _loadSeq++;
         await AuthStore.clear();
         _goLogin();
         return;
       }
       setState(() {
         _loading = false;
-        _error = '加载失败：$e';
+        if (_result != null) {
+          // 缓存还能看，别整屏报错把人吓一跳，顶部挂一行提示就够
+          _fromCache = true;
+          _staleReason = _whyOffline(e);
+        } else {
+          _error = '加载失败：$e';
+        }
       });
     }
   }
 
+  /// 把网络异常压成一句人话，挂在缓存提示后面
+  String _whyOffline(Object e) {
+    final s = e.toString();
+    if (s.contains('SocketException') || s.contains('Connection')) {
+      return '网络不可用';
+    }
+    if (s.contains('imeout')) return '请求超时';
+    return '刷新失败';
+  }
+
   Future<void> _goLogin() async {
-    if (!mounted) return;
-    final ok = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => const PasswordLoginPage()),
-    );
-    if (ok == true) {
-      _load();
-    } else {
-      setState(() {
-        _loading = false;
-        _error = '未登录';
-      });
+    if (!mounted || _loginOpen) return;
+    _loginOpen = true;
+    try {
+      // 勾了「自动登录」就先悄悄登一次，不行再打登录页
+      final ok = await AutoLogin.ensureLoggedIn(context);
+      if (!mounted) return;
+      if (ok) {
+        // 登录成功：saveCookie 已经通知过 _onAuthChanged，那次 _load 正在跑；
+        // 这里再叫一次是保底（seq 机制保证不会互相覆盖）。用默认的
+        // keepSelection=false，按登录后的实际情况重新解析学期/校区。
+        _load();
+      } else {
+        setState(() {
+          _loading = false;
+          _error = '未登录';
+        });
+      }
+    } finally {
+      _loginOpen = false;
     }
   }
 
@@ -269,14 +362,50 @@ class _TimetablePageState extends State<TimetablePage> {
         ),
       );
     }
-    return RefreshIndicator(
-      onRefresh: () => _load(keepSelection: true),
-      child: _TimetableGrid(
-        courses: _visibleCourses,
-        week: _week,
-        onTap: _showCourseDetail,
-        onLongPress: _editNote,
-        campusId: _campus,
+    return Column(
+      children: [
+        if (_fromCache) _staleBanner(),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: () => _load(keepSelection: true),
+            child: _TimetableGrid(
+              courses: _visibleCourses,
+              week: _week,
+              onTap: _showCourseDetail,
+              onLongPress: _editNote,
+              campusId: _campus,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 显示的是缓存内容时顶上挂的一条：点一下立刻重试
+  Widget _staleBanner() {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surfaceContainerHighest,
+      child: InkWell(
+        onTap: () => _load(keepSelection: true),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            children: [
+              Icon(_staleReason == null ? Icons.sync : Icons.cloud_off,
+                  size: 16, color: Colors.grey),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _staleReason == null
+                      ? '正在更新课表…'
+                      : '$_staleReason，显示的是上次缓存的内容 · 点此重试',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
