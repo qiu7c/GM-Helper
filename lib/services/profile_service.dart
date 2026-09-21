@@ -3,6 +3,7 @@ import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 
 import '../config.dart';
+import 'session_guard.dart';
 
 /// 学籍/个人信息
 class Profile {
@@ -103,13 +104,7 @@ class ProfileService {
   }
 
   void _throwIfLoggedOut(int? status, String body) {
-    final isRedirect = status != null && status >= 300 && status < 400;
-    if (isRedirect ||
-        body.contains('用户登录') ||
-        body.contains('login.jsp') ||
-        body.contains('账号登录')) {
-      throw sessionExpired;
-    }
+    if (SessionGuard.looksLoggedOut(status, body)) throw sessionExpired;
   }
 
   /// 解析桌面页 .middletopttxlr 块：

@@ -4,8 +4,13 @@ import '../services/auth_store.dart';
 import '../services/cas_login_service.dart';
 import 'login_page.dart';
 
-/// 自绘账号密码登录页：纯 HTTP 模拟 CAS 登录，无需 WebView。
-/// 登录失败或需要验证码时，可一键切到 WebView 网页登录兜底。
+/// 自绘账号密码登录页。
+///
+/// 主路径：把账号密码交给 WebView，**模拟人手动输入两个输入框再点登录**
+/// （见 [LoginPage] 的自动填充模式）。加密/跳转/Cookie 全由浏览器内核完成，
+/// 最稳；页面可见，需要验证码时用户能直接接管。
+///
+/// 备用路径：纯 HTTP 直连登录（不打开网页），失败时可在下方展开排错日志。
 class PasswordLoginPage extends StatefulWidget {
   const PasswordLoginPage({super.key});
 
@@ -39,7 +44,32 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
     super.dispose();
   }
 
+  /// 主路径：交给 WebView 自动填充并提交（模拟人输入）
   Future<void> _submit() async {
+    final user = _userCtrl.text.trim();
+    final pwd = _pwdCtrl.text;
+    if (user.isEmpty || pwd.isEmpty) {
+      setState(() => _error = '请输入账号和密码');
+      return;
+    }
+    setState(() {
+      _error = null;
+      _trace = [];
+    });
+
+    final ok = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => LoginPage(autoUsername: user, autoPassword: pwd),
+      ),
+    );
+    if (ok == true) {
+      await AuthStore.saveUsername(user);
+      if (mounted) Navigator.of(context).pop(true);
+    }
+  }
+
+  /// 备用路径：不打开网页，用 HTTP 直接走一遍 CAS
+  Future<void> _directLogin() async {
     final user = _userCtrl.text.trim();
     final pwd = _pwdCtrl.text;
     if (user.isEmpty || pwd.isEmpty) {
@@ -74,14 +104,6 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
-  }
-
-  /// 切换到 WebView 网页登录兜底
-  Future<void> _webLogin() async {
-    final ok = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => const LoginPage()),
-    );
-    if (ok == true && mounted) Navigator.of(context).pop(true);
   }
 
   @override
@@ -175,11 +197,20 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
                     : const Text('登录', style: TextStyle(fontSize: 16)),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 4),
+              child: Text(
+                '登录时会短暂显示认证网页，出现验证码请在页面上输入。',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ),
+            const SizedBox(height: 8),
             TextButton.icon(
-              onPressed: _loading ? null : _webLogin,
-              icon: const Icon(Icons.public, size: 18),
-              label: const Text('登录遇到问题？改用网页登录'),
+              onPressed: _loading ? null : _directLogin,
+              icon: const Icon(Icons.bolt, size: 18),
+              label: const Text('不打开网页，直连登录（实验）'),
             ),
           ],
         ),

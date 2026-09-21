@@ -17,11 +17,16 @@ class CasLoginException implements Exception {
   String toString() => message;
 }
 
-/// 纯 HTTP 模拟统一身份认证(CAS)登录。
+/// 纯 HTTP 模拟统一身份认证(CAS)登录（不打开网页的备用路径）。
 ///
-/// 关键点：**手动逐跳跟随 302 重定向**，每跳都过 CookieJar。
+/// 关键点一：**手动逐跳跟随 302 重定向**，每跳都过 CookieJar。
 /// 若用 dio 的自动 followRedirects，中间跳转的 Set-Cookie 会丢失，
 /// 导致 SSO 过程中 eportal/jw 逐跳种的会话 cookie 拿不到。
+///
+/// 关键点二：**每个请求都必须显式设置 validateStatus**。
+/// dio 的默认规则是"只有 2xx 算成功"，而登录全程全是 302；
+/// 直接 new 一个 RequestOptions 而不带 validateStatus，就会在第一次
+/// 跳转时抛 DioException(bad response, 302)。所以统一走 [_ro] 构造。
 class CasLoginService {
   late final CookieJar _jar;
   late final Dio _dio;
@@ -30,7 +35,7 @@ class CasLoginService {
     _jar = CookieJar();
     _dio = Dio(BaseOptions(
       followRedirects: false, // 手动跟跳，保证每跳都过 CookieJar
-      validateStatus: (s) => s != null && s < 500,
+      validateStatus: _acceptAll,
       headers: {
         'User-Agent':
             'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 '
@@ -42,19 +47,39 @@ class CasLoginService {
     _dio.interceptors.add(CookieManager(_jar));
   }
 
+  /// 4xx 也可能是正常业务响应（例如密码错误回到登录页），
+  /// 只有 5xx 才算真正的服务端故障。
+  static bool _acceptAll(int? s) => s != null && s < 500;
+
   bool debugLog = false;
   final List<String> _trace = [];
   List<String> get trace => List.unmodifiable(_trace);
+
+  /// 统一构造请求参数，确保 followRedirects / validateStatus 不会漏设
+  RequestOptions _ro(
+    String path, {
+    String method = 'GET',
+    Map<String, String>? headers,
+    Object? data,
+    String? contentType,
+  }) {
+    return RequestOptions(
+      path: path,
+      method: method,
+      data: data,
+      contentType: contentType,
+      headers: headers ?? const {},
+      followRedirects: false,
+      validateStatus: _acceptAll,
+    );
+  }
 
   /// 登录并返回 jw.gdgm.cn 的 Cookie 字符串。失败抛 [CasLoginException]。
   Future<String> login(String username, String password) async {
     _trace.clear();
 
     // 1) 取登录页（可能自身也有跳转）
-    final pageResp = await _follow(RequestOptions(
-      path: AppConfig.loginPwdUrl,
-      method: 'GET',
-    ));
+    final pageResp = await _follow(_ro(AppConfig.loginPwdUrl));
     final pageHtml = pageResp.data?.toString() ?? '';
     if (pageHtml.isEmpty) {
       throw CasLoginException('无法打开登录页，请检查网络');
@@ -89,8 +114,8 @@ class CasLoginService {
         : AppConfig.loginPwdUrl;
 
     // 2) POST 登录，并逐跳跟随其后的 302 链（经 eportal 种会话）
-    final postResp = await _follow(RequestOptions(
-      path: postUrl,
+    final postResp = await _follow(_ro(
+      postUrl,
       method: 'POST',
       data: _encodeForm(formData),
       contentType: Headers.formUrlEncodedContentType,
@@ -108,28 +133,21 @@ class CasLoginService {
     }
 
     // 3) 走教务入口 appShow，逐跳跟到 jw，给 jw 种会话
-    await _follow(RequestOptions(
-      path: AppConfig.jwEntryUrl,
-      method: 'GET',
-      headers: {'Referer': AppConfig.portalUrl},
-    ));
+    await _follow(_ro(AppConfig.jwEntryUrl,
+        headers: {'Referer': AppConfig.portalUrl}));
 
     // 4) 再访问一次教务主框架，确保 JSESSIONID 落定并验证会话真的有效。
     //    若 SSO 握手没完成，jw 只会给一个"匿名" JSESSIONID：cookie 有、
     //    但一请求就被打回登录页。这里必须确认真的落在了教务主框架。
-    final mainResp = await _follow(RequestOptions(
-      path: AppConfig.jwMainUrl,
-      method: 'GET',
-      headers: {'Referer': AppConfig.portalUrl},
-    ));
+    final mainResp = await _follow(_ro(AppConfig.jwMainUrl,
+        headers: {'Referer': AppConfig.portalUrl}));
     final mainUrl = mainResp.realUri.toString();
     final mainHtml = mainResp.data?.toString() ?? '';
     final bouncedToLogin = mainUrl.contains('authserver') ||
         mainUrl.contains('/login') ||
-        mainHtml.contains('用户登录') ||
-        mainHtml.contains('login.jsp');
-    final onJwMain =
-        mainUrl.contains('/jsxsd/') && !bouncedToLogin;
+        mainHtml.contains('casLoginForm') ||
+        mainHtml.contains('pwdDefaultEncryptSalt');
+    final onJwMain = mainUrl.contains('/jsxsd/') && !bouncedToLogin;
 
     // 5) 导出 jw.gdgm.cn 的 Cookie
     final cookies = await _jar.loadForRequest(Uri.parse(AppConfig.jwHost));
@@ -168,12 +186,10 @@ class CasLoginService {
       if (loc == null || loc.isEmpty) break;
       final next = resp.realUri.resolve(loc);
       hops++;
-      opts = RequestOptions(
-        path: next.toString(),
-        method: 'GET', // 302 后一律 GET
+      // 302 后一律 GET，并带上 Referer；同样要显式放开 3xx
+      opts = _ro(
+        next.toString(),
         headers: {'Referer': resp.realUri.toString()},
-        followRedirects: false,
-        validateStatus: (s) => s != null && s < 500,
       );
       resp = await _dio.fetch(opts);
       _trace.add('GET $next -> ${resp.statusCode}');
@@ -190,8 +206,14 @@ class CasLoginService {
       final url =
           'https://sfrz.gdgm.cn/authserver/needCaptcha.html?username=$username'
           '&_=${DateTime.now().millisecondsSinceEpoch}';
-      final resp = await _dio.get<String>(url,
-          options: Options(headers: {'Referer': AppConfig.loginPwdUrl}));
+      final resp = await _dio.get<String>(
+        url,
+        options: Options(
+          headers: {'Referer': AppConfig.loginPwdUrl},
+          followRedirects: false,
+          validateStatus: _acceptAll,
+        ),
+      );
       final t = (resp.data ?? '').trim().toLowerCase();
       _trace.add('needCaptcha -> $t');
       return t.contains('true');

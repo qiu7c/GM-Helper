@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 class AboutPage extends StatelessWidget {
   const AboutPage({super.key});
 
-  static const String version = '1.0.1';
+  static const String version = '1.0.2';
   static const String author = 'cc';
   static const String email = 'xcc575838@gmail.com';
   static const String qq = '921569084';

@@ -4,6 +4,7 @@ import 'package:html/parser.dart' as html_parser;
 
 import '../config.dart';
 import '../models/course.dart';
+import 'session_guard.dart';
 
 /// 拉取并解析教务系统课表
 class ScheduleService {
@@ -35,10 +36,8 @@ class ScheduleService {
     try {
       final resp = await _dio.get<String>(_desktopUrl);
       final body = resp.data ?? '';
-      final isRedirect = resp.statusCode != null &&
-          resp.statusCode! >= 300 &&
-          resp.statusCode! < 400;
-      if (isRedirect || body.contains('用户登录')) return null;
+      // 未登录/会话失效时拿不到校历，返回 null 交给上层（不在这里清 Cookie）
+      if (SessionGuard.looksLoggedOut(resp.statusCode, body)) return null;
 
       final doc = html_parser.parse(body);
 
@@ -104,12 +103,9 @@ class ScheduleService {
       );
     }
 
-    // 登录失效：教务系统会 302 跳转到登录页，或返回登录页面文本
+    // 登录失效：教务系统未登录时会 302 跳到统一身份认证，或直接返回登录页
     final body = resp.data ?? '';
-    final isRedirect = resp.statusCode != null &&
-        resp.statusCode! >= 300 &&
-        resp.statusCode! < 400;
-    if (isRedirect || body.contains('用户登录') || body.contains('login.jsp')) {
+    if (SessionGuard.looksLoggedOut(resp.statusCode, body)) {
       throw sessionExpired;
     }
 
