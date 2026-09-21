@@ -54,6 +54,9 @@ class _LoginPageState extends State<LoginPage> {
   /// 登录页回显的错误（账号密码错、需要验证码等）
   String? _pageError;
 
+  /// 自动填充时两个输入框的实际长度（如 "账号10/密码8"），用于排错
+  String _fillState = '';
+
   @override
   void initState() {
     super.initState();
@@ -113,10 +116,23 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   /// 往登录页的两个输入框写入账号密码，然后点它自己的登录按钮。
-  /// 关键：必须**点按钮**而不是 form.submit()，因为密码加密是在
-  /// 按钮的点击处理器里做的，直接提交会把明文发过去。
+  ///
+  /// 两个坑：
+  ///  1. 必须**点按钮**而不是 form.submit()，因为密码加密是在按钮的点击
+  ///     处理器里做的，直接提交会把明文发过去。
+  ///  2. 不少登录页会清空密码框（防自动填充），或者给密码框加 readonly。
+  ///     所以填完要**当场回读校验**，两格都有值才提交；否则不提交，稍后重试，
+  ///     免得拿空密码去撞把账号锁了。
   Future<void> _autoFill(InAppWebViewController c) async {
-    if (_autoSubmitted || _autoBusy || _autoTries > 8) return;
+    if (_autoSubmitted || _autoBusy) return;
+    // 重试到头仍没填进去：明确告诉用户手动接管，别让他干等
+    if (_autoTries > 8) {
+      if (mounted && _phase == _Phase.login && _pageError == null) {
+        setState(() => _pageError = '自动填写没生效（$_fillState），'
+            '请在页面上手动输入密码后点「登录」。');
+      }
+      return;
+    }
     _autoBusy = true;
     _autoTries++;
     try {
@@ -129,39 +145,67 @@ class _LoginPageState extends State<LoginPage> {
           var p = document.querySelector('#password')
                || document.querySelector('input[name="password"]');
           if (!u || !p) return 'NOFORM';
+
           function setVal(el, v) {
+            try { el.removeAttribute('readonly'); } catch (e) {}
+            try { el.focus(); } catch (e) {}
             try {
               var d = Object.getOwnPropertyDescriptor(
                   el.constructor.prototype, 'value');
               if (d && d.set) { d.set.call(el, v); } else { el.value = v; }
             } catch (e) { el.value = v; }
+            if (el.value !== v) {
+              try { el.setAttribute('value', v); } catch (e) {}
+            }
+            // 只发 input/change。不要发 blur：有些登录页在失焦时会清空密码框。
             el.dispatchEvent(new Event('input',  { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
-            el.dispatchEvent(new Event('blur',   { bubbles: true }));
+            return el.value === v;
           }
-          setVal(u, $user);
-          setVal(p, $pass);
+
+          var okU = setVal(u, $user);
+          var okP = setVal(p, $pass);
+          // 被清掉就同步再写一次（不给页面的定时器留机会）
+          if (!okP) { okP = setVal(p, $pass); }
+          if (!okU) { okU = setVal(u, $user); }
+
+          var state = '账号' + (u.value ? u.value.length : 0) +
+                      '/密码' + (p.value ? p.value.length : 0);
+          if (!okP || !u.value || !p.value) return 'PWDFAIL:' + state;
+
           var btn = document.querySelector('#loginButton')
                  || document.querySelector('#submitBtn')
                  || document.querySelector('button[type="submit"]')
                  || document.querySelector('input[type="submit"]');
-          if (btn) { btn.click(); return 'CLICKED'; }
-          return 'NOBTN';
-        })()
-      '''))?.toString();
+          if (!btn) return 'NOBTN:' + state;
 
-      if (result == 'CLICKED') {
+          btn.click();
+          return 'CLICKED:' + state;
+        })()
+      '''))?.toString() ??
+          '';
+
+      if (result.startsWith('CLICKED')) {
         _autoSubmitted = true;
-        if (mounted) setState(() => _hint = '正在登录…');
+        if (mounted) {
+          setState(() {
+            _fillState = result.substring('CLICKED:'.length);
+            _hint = '正在登录…';
+          });
+        }
         _watchStuck();
         return;
       }
 
-      // 页面可能还没渲染完，稍后重试
-      await Future<void>.delayed(const Duration(milliseconds: 700));
+      // 没提交成功（页面没渲染完 / 密码被清空 / 找不到按钮）：稍后重试
+      if (result.startsWith('PWDFAIL')) {
+        _fillState = result.substring('PWDFAIL:'.length);
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 600));
       if (!mounted || _phase != _Phase.login || _autoSubmitted) return;
       _autoBusy = false;
       await _autoFill(c);
+      return;
     } catch (_) {
       // 注入失败就交给用户手动在页面上操作
     } finally {
@@ -336,7 +380,7 @@ class _LoginPageState extends State<LoginPage> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               child: Text(
                 _autoSubmitted
-                    ? '已自动填入账号密码并提交；若出现验证码，请在页面上输入后点「登录」。'
+                    ? '已自动填入（$_fillState）并提交；若出现验证码，请在页面上输入后点「登录」。'
                     : '正在自动填入账号密码…',
                 style: const TextStyle(fontSize: 13),
               ),
