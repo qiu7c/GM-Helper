@@ -85,7 +85,9 @@ class _ProfilePageState extends State<ProfilePage> {
           e == ScheduleService.sessionExpired) {
         // 让出这一轮再清 cookie，免得上面那句 _check 重入时又被自己挡掉
         _checkSeq++;
-        await AuthStore.clear();
+        // 会话过期不是用户主动退出：课表缓存留着（见 AuthStore.clearSession），
+        // 否则重登之前打开课表页会是一片空白。
+        await AuthStore.clearSession();
         if (!mounted) return;
         setState(() => _status = _Status.loggedOut);
       } else {

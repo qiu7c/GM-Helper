@@ -27,6 +27,21 @@ class ScheduleService {
   /// 抛出该异常表示会话已失效，需要重新登录
   static const sessionExpired = 'SESSION_EXPIRED';
 
+  /// 课表页的**自有**结构锚点：真页面上至少有其中一个。
+  ///
+  /// 用来识别"会话超时的过渡页"—— 那种页面既不跳转也没有 CAS 表单，
+  /// [SessionGuard.looksLoggedOut] 认不出来，会被当成一份空课表解析掉。
+  /// 详见 [SessionGuard.containsAnyOf]。
+  ///
+  /// 只收这三个 id，是因为它们是课表页自己渲染出来的控件，别处不会有。
+  /// 别再往里加 'jsxsd' 这种路径前缀之类的宽泛词：过渡页里也可能出现，
+  /// 一旦命中就整条判断失效，等于白加 —— 判断要**严**，宁可误报也不能漏报。
+  static const List<String> _timetableAnchors = [
+    'xnxq01id', // 学年学期下拉框
+    'kbjcmsid', // 校区(时间模式)下拉框
+    'kbtable', // 课表本体
+  ];
+
   /// 教务桌面页（含 .middletopleftrqbox 当前周/日期块）
   static const String _desktopUrl =
       '${AppConfig.jwHost}/jsxsd/framework/xsMain_new.jsp';
@@ -103,9 +118,20 @@ class ScheduleService {
       );
     }
 
-    // 登录失效：教务系统未登录时会 302 跳到统一身份认证，或直接返回登录页
     final body = resp.data ?? '';
+    // 1) 明确的登录失效：302 跳到统一身份认证，或直接返回登录页
     if (SessionGuard.looksLoggedOut(resp.statusCode, body)) {
+      throw sessionExpired;
+    }
+    // 2) 拿到了 200，但正文里一个课表页的锚点都没有 —— 这不是课表页。
+    //    会话超时的过渡页就长这样：不跳转、没登录表单，光看状态码和登录页特征
+    //    都发现不了。不在这里拦住的话，_parse 会安静地解析出一份空课表，
+    //    用户看到的是"还显示已登录，但课表全空"，刷新多少次都一样。
+    //
+    //    只在 200 上判：网络错误/5xx 会直接抛异常走各自的错误处理，
+    //    那种情况不该误判成会话失效（否则一断网就把登录态清了）。
+    if (resp.statusCode == 200 &&
+        !SessionGuard.containsAnyOf(body, _timetableAnchors)) {
       throw sessionExpired;
     }
 

@@ -12,16 +12,19 @@ import '../models/course.dart';
 ///
 /// 用途是「先铺后刷」：打开 App 先把缓存显示出来，再后台联网刷新。
 /// 教务系统抽风或断网时，至少还能看上次的课表，而不是一片空白或者转圈。
+///
+/// key 里带着**用户名**：会话过期时缓存是不清的（见 `AuthStore.clearSession`），
+/// 带上账号才能保证换个人登录时不会先闪一眼上一个人的课表。
 class ScheduleCache {
   ScheduleCache._();
 
   static const _kKey = 'schedule_cache_v1';
 
-  /// 最多留几份，避免换学期/校区后无限堆积
+  /// 最多留几份，避免换账号/学期/校区后无限堆积
   static const _maxEntries = 6;
 
-  static String _keyOf(String? term, String? campus) =>
-      '${term ?? ''}|${campus ?? ''}';
+  static String _keyOf(String? user, String? term, String? campus) =>
+      '${user ?? ''}|${term ?? ''}|${campus ?? ''}';
 
   static Future<Map<String, dynamic>> _readAll() async {
     final sp = await SharedPreferences.getInstance();
@@ -39,9 +42,13 @@ class ScheduleCache {
   /// 读缓存。没有、坏了、或者是个空课表都返回 null。
   ///
   /// 空课表特意当作"没有缓存"：宁可转圈，也别拿一份空表把用户的课表抹掉。
-  static Future<ScheduleResult?> read({String? term, String? campus}) async {
+  static Future<ScheduleResult?> read({
+    String? user,
+    String? term,
+    String? campus,
+  }) async {
     final all = await _readAll();
-    final entry = all[_keyOf(term, campus)];
+    final entry = all[_keyOf(user, term, campus)];
     if (entry is! Map) return null;
     final e = entry.cast<String, dynamic>();
     try {
@@ -66,14 +73,19 @@ class ScheduleCache {
   }
 
   /// 这份缓存是什么时候抓的
-  static Future<DateTime?> cachedAt({String? term, String? campus}) async {
+  static Future<DateTime?> cachedAt({
+    String? user,
+    String? term,
+    String? campus,
+  }) async {
     final all = await _readAll();
-    final entry = all[_keyOf(term, campus)];
+    final entry = all[_keyOf(user, term, campus)];
     if (entry is! Map) return null;
     return DateTime.tryParse((entry['at'] ?? '').toString());
   }
 
   static Future<void> write({
+    String? user,
     String? term,
     String? campus,
     required ScheduleResult result,
@@ -81,7 +93,7 @@ class ScheduleCache {
     // 空课表不写：否则一次异常的响应就把好数据覆盖掉了
     if (result.courses.isEmpty) return;
     final all = await _readAll();
-    final k = _keyOf(term, campus);
+    final k = _keyOf(user, term, campus);
     all.remove(k); // 先删再插，让它排到最新
     all[k] = {
       'at': DateTime.now().toIso8601String(),
@@ -102,7 +114,8 @@ class ScheduleCache {
     await sp.setString(_kKey, jsonEncode(all));
   }
 
-  /// 退出登录时清掉：免得换账号后先闪一眼上一个人的课表
+  /// 用户主动退出登录时清掉。会话过期**不要**调这个 ——
+  /// 那种情况下课表本身还是有效的，留着比清掉有用（见 `AuthStore.clearSession`）。
   static Future<void> clear() async {
     final sp = await SharedPreferences.getInstance();
     await sp.remove(_kKey);

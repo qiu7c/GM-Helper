@@ -96,6 +96,9 @@ class _TimetablePageState extends State<TimetablePage> {
       _goLogin();
       return;
     }
+    // 缓存的 key 里带账号：会话过期时缓存不清，带上账号才不会串到别人身上
+    final user = await AuthStore.getSavedUsername();
+    if (seq != _loadSeq) return;
 
     // 先把这次要查的学期/校区定下来：缓存和网络请求用同一套参数，
     // 否则缓存铺的是 A 学期、网络回的是 B 学期，会闪。
@@ -108,7 +111,8 @@ class _TimetablePageState extends State<TimetablePage> {
     // 1) 铺缓存。已经显示了同一份内容就不重复读了。
     final changed = wantTerm != _term || wantCampus != _campus;
     if (_result == null || changed) {
-      final cached = await ScheduleCache.read(term: wantTerm, campus: wantCampus);
+      final cached =
+          await ScheduleCache.read(user: user, term: wantTerm, campus: wantCampus);
       if (seq != _loadSeq) return;
       if (cached != null) {
         setState(() {
@@ -160,7 +164,8 @@ class _TimetablePageState extends State<TimetablePage> {
         _fromCache = false;
         _staleReason = null;
       });
-      await ScheduleCache.write(term: _term, campus: _campus, result: result);
+      await ScheduleCache.write(
+          user: user, term: _term, campus: _campus, result: result);
       if (_term != null) await AuthStore.saveLastTerm(_term!);
       if (_campus != null) await AuthStore.saveLastCampus(_campus!);
       SchedulePrefs.instance.sync(term: _term, campus: _campus);
@@ -170,7 +175,9 @@ class _TimetablePageState extends State<TimetablePage> {
         // 先让出这一轮，再弹登录页：否则登录成功后的那次 _load 会被
         // 自己这轮的 seq 挡掉
         _loadSeq++;
-        await AuthStore.clear();
+        // 只清 Cookie，课表缓存留着：会话过期不代表那学期的课表变了，
+        // 用户在看到登录页之前至少还有课表可看（见 AuthStore.clearSession）。
+        await AuthStore.clearSession();
         _goLogin();
         return;
       }

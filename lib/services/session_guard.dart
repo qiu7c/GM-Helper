@@ -16,6 +16,26 @@ class SessionGuard {
     'pwdDefaultEncryptSalt',
   ];
 
+  /// 正文里是否出现 [markers] 里的任意一个。
+  ///
+  /// 配合 [looksLoggedOut] 用来堵一个很隐蔽的洞：会话失效后，教务系统**不一定**
+  /// 会跳转。它也可能安安静静回一个 200 的"会话超时"过渡页（页面里靠 JS 自己
+  /// 跳），那种页面既不是 3xx，正文里也没有 CAS 登录表单 —— [looksLoggedOut]
+  /// 两条都认不出来，于是解析器照常跑、解析出一份空数据。
+  ///
+  /// 用户看到的就是那个很迷惑的现象：**还显示已登录，但课表和学籍信息全空**，
+  /// 而且怎么刷新都出不来。
+  ///
+  /// 所以再加一条正面判断：真业务页面一定有它的结构锚点。一个锚点都没有，
+  /// 说明拿到的根本不是业务页面。锚点要挑**只有这个页面才有**的字符串，
+  /// 不能挑 '用户登录' 这种满世界都是的词。
+  static bool containsAnyOf(String body, List<String> markers) {
+    for (final m in markers) {
+      if (body.contains(m)) return true;
+    }
+    return false;
+  }
+
   /// [status] 为 HTTP 状态码，[body] 为响应正文。
   static bool looksLoggedOut(int? status, String body) {
     if (status == null) return false;

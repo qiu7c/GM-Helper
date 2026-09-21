@@ -31,12 +31,23 @@ class AuthStore {
     return sp.getString(_kCookie);
   }
 
-  static Future<void> clear() async {
+  /// 会话失效（不是用户主动退出）：只丢掉 Cookie，**课表缓存留着**。
+  ///
+  /// 课表是按「账号 + 学期 + 校区」存的，跟这一次会话的死活无关 —— 教务系统的
+  /// 会话闲置一会儿就过期，但那个学期的课表并不会因此改变。留着它，用户重新
+  /// 登录之前至少还能看到自己的课表，而不是打开 App 一片空白。
+  ///
+  /// 换账号也不会串味：缓存的 key 里带着用户名（见 [ScheduleCache]）。
+  static Future<void> clearSession() async {
     final sp = await SharedPreferences.getInstance();
     await sp.remove(_kCookie);
-    // 课表缓存跟着会话一起清：换账号后别先闪一眼上一个人的课表
-    await ScheduleCache.clear();
     authRevision.value++;
+  }
+
+  /// 用户主动点「退出登录」：连课表缓存一起清掉。
+  static Future<void> clear() async {
+    await clearSession();
+    await ScheduleCache.clear();
   }
 
   static Future<bool> isLoggedIn() async {

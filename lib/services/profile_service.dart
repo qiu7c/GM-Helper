@@ -63,11 +63,18 @@ class ProfileService {
     String studentId = '';
     final fields = <MapEntry<String, String>>[];
 
+    /// 是否真的拿到过一次"服务端的 200 页面"。
+    /// 网络错误会被下面的 catch 吞掉，那种情况不该判成会话失效
+    /// （否则一断网就把登录态清了）。只有确实收到了页面、却什么都没解析出来，
+    /// 才说明拿到的不是业务页。
+    var gotPage = false;
+
     // 1) 桌面页：一个块拿全部信息
     try {
       final resp = await _dio.get<String>(_desktopUrl);
       final body = resp.data ?? '';
       _throwIfLoggedOut(resp.statusCode, body);
+      if (resp.statusCode == 200) gotPage = true;
       final parsed = _parseDesktop(body);
       for (final e in parsed) {
         switch (e.key) {
@@ -93,11 +100,20 @@ class ProfileService {
         final frame = await _dio.get<String>(_frameUrl);
         final body = frame.data ?? '';
         _throwIfLoggedOut(frame.statusCode, body);
+        if (frame.statusCode == 200) gotPage = true;
         if (name.isEmpty) name = _extractFrameName(body);
         if (studentId.isEmpty) studentId = _extractFrameStudentId(body);
       } catch (e) {
         if (e == sessionExpired) rethrow;
       }
+    }
+
+    // 收到了页面，却连姓名、学号、任何一项信息都没解析出来 —— 那不是业务页，
+    // 多半是会话超时的过渡页（它不跳转、也没有 CAS 表单，_throwIfLoggedOut
+    // 认不出来）。真账号一定有姓名，所以"全空"只可能是没登进去。
+    // 不在这里拦住的话，「我的」页会显示成"已登录但所有字段都是空的"。
+    if (gotPage && name.isEmpty && studentId.isEmpty && fields.isEmpty) {
+      throw sessionExpired;
     }
 
     return Profile(name: name, studentId: studentId, fields: fields);
