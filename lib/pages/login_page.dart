@@ -31,13 +31,29 @@ import '../services/auth_store.dart';
 ///     区分，不能按选择器区分；两者同时出现时（密码错很多次之后就是这样）
 ///     按验证码处理 —— 那时候密码和验证码都得在网页上改。
 ///
-/// 注意遮罩是"盖住"而不是"不渲染"——WebView 必须有真实布局才能执行 JS，
-/// 藏起来（Offstage / 尺寸 0）就没法自动填了。
+/// 把网页藏起来用的是 **Opacity(0)**，不是 Offstage / 尺寸 0 —— 后两者会让
+/// WebView 失去真实布局，`getBoundingClientRect` 返回 0，自动填充直接失效
+/// （v1.0.4 就是这么坏的）。Opacity 只影响绘制不影响布局，JS 照跑。
+/// 另外它比"盖一层"更彻底：Android 上 WebView 是系统合成的 platform view，
+/// 只靠 Flutter 组件盖住，偶尔会漏出一帧。
+///
+/// 三种进法：[autoUsername]+[autoPassword] 自动登录（网页透明+转圈框）、
+/// [initialUrl] 直达某个入口（企业微信扫码，网页全程可见）、
+/// 都不给则先出"选择登录方式"。
 class LoginPage extends StatefulWidget {
-  const LoginPage({super.key, this.autoUsername, this.autoPassword});
+  const LoginPage({
+    super.key,
+    this.autoUsername,
+    this.autoPassword,
+    this.initialUrl,
+  });
 
   final String? autoUsername;
   final String? autoPassword;
+
+  /// 跳过"选择登录方式"直接进某个入口（目前用于企业微信扫码）。
+  /// 和 [autoUsername] 互斥：扫码没有账号密码可填。
+  final String? initialUrl;
 
   bool get auto =>
       (autoUsername ?? '').isNotEmpty && (autoPassword ?? '').isNotEmpty;
@@ -96,9 +112,15 @@ class _LoginPageState extends State<LoginPage> {
   /// 登录页里相关输入框的真实结构（自动填充失败时回显，便于定位问题）
   String _domDump = '';
 
-  /// 网页是否已经露出来。自动模式下初始为 false（只显示"正在登录"的框），
+  /// 自动模式下网页是否已经露出来。初始为 false（只显示"正在登录"的框），
   /// 一旦自动登录没成功就置为 true，让用户能在网页上手动接管。
   bool _webVisible = false;
+
+  /// 此刻网页该不该被看见。
+  ///
+  /// 只有自动模式才藏网页；另外两条路（扫码 initialUrl、选择登录方式）本来
+  /// 就要用户看着网页操作，一进来就是可见的。
+  bool get _showWeb => !widget.auto || _webVisible;
 
   /// 最近一次拿到的页面地址，用来判断"点了登录却还停在认证页"
   String _lastUrl = '';
@@ -113,6 +135,12 @@ class _LoginPageState extends State<LoginPage> {
       _startUrl = AppConfig.loginPwdUrl;
       _hint = '正在自动登录…';
       _watchOverall();
+    } else if (widget.initialUrl != null) {
+      _startUrl = widget.initialUrl;
+      _hint = '企业微信扫码登录';
+      // 扫码这条路必须**一开始就把网页露出来**：二维码总得让人看见才能扫。
+      // 也正因如此这里不调 _watchOverall —— 那个兜底是给"盖着转圈"用的。
+      _webVisible = true;
     }
   }
 
@@ -588,8 +616,9 @@ class _LoginPageState extends State<LoginPage> {
 
   /// 自动登录时盖在网页上的"正在登录"框。
   ///
-  /// 用遮罩而不是把 WebView 藏起来（Offstage / 尺寸 0）：WebView 必须有真实
-  /// 布局才会执行 JS，藏了就自动填不进去了。这里只是不让用户看到页面本身。
+  /// 藏网页本身是 [Opacity] 干的（见 InAppWebView 那里的注释）；这一层只负责
+  /// 转圈的界面。留它是因为：万一 platform view 还是漏出点什么，这层不透明的
+  /// 底能兜住，而且用户看到的就是个干净的登录中提示。
   Widget _buildLoginCover() {
     return Positioned.fill(
       child: ColoredBox(
@@ -775,60 +804,79 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                 ),
               Expanded(
-                child: InAppWebView(
-                  key: ValueKey(_startUrl),
-                  initialUrlRequest: URLRequest(url: WebUri(_startUrl!)),
-                  initialSettings: InAppWebViewSettings(
-                    userAgent:
-                        'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 '
-                        '(KHTML, like Gecko) Chrome/120 Mobile Safari/537.36',
-                    javaScriptEnabled: true,
-                    thirdPartyCookiesEnabled: true,
-                    sharedCookiesEnabled: true,
-                    // ↓↓ 修黑屏的关键设置 ↓↓
-                    // Android 用混合合成，解决部分机型 WebView 全黑不渲染
-                    useHybridComposition: true,
-                    // 教务/门户偶有 http 资源，允许混合内容，否则页面部分空白
-                    mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
-                    // 支持缩放，页面太宽时可放大看清
-                    supportZoom: true,
-                    builtInZoomControls: true,
-                    displayZoomControls: false,
-                    useWideViewPort: true,
-                    loadWithOverviewMode: true,
-                    // iOS 允许内联播放，避免白/黑屏
-                    allowsInlineMediaPlayback: true,
-                    transparentBackground: false,
+                // 藏网页靠的是**把 WebView 自己设成透明**，不是靠上面那层盖住。
+                // Android 上 WebView 是交给系统合成的 platform view，光盖一层
+                // Flutter 组件偶尔会漏出一帧（就是那一瞬间闪出来的网页）。
+                // Opacity 只影响绘制、不影响布局，所以 WebView 仍有真实尺寸、
+                // JS 照跑，getBoundingClientRect 也照常返回值 —— 自动填充不受影响。
+                //
+                // 千万不能用 Offstage / 尺寸 0 / Visibility(visible:false)：
+                // 那样 WebView 没有真实布局，会重蹈 v1.0.4 "密码填不进去"的坑。
+                child: IgnorePointer(
+                  // 看不见的时候别让它偷吃点击
+                  ignoring: !_showWeb,
+                  child: Opacity(
+                    opacity: _showWeb ? 1 : 0,
+                    child: InAppWebView(
+                      key: ValueKey(_startUrl),
+                      initialUrlRequest: URLRequest(url: WebUri(_startUrl!)),
+                      initialSettings: InAppWebViewSettings(
+                        userAgent:
+                            'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 '
+                            '(KHTML, like Gecko) Chrome/120 Mobile Safari/537.36',
+                        javaScriptEnabled: true,
+                        thirdPartyCookiesEnabled: true,
+                        sharedCookiesEnabled: true,
+                        // ↓↓ 修黑屏的关键设置 ↓↓
+                        // Android 用混合合成，解决部分机型 WebView 全黑不渲染
+                        useHybridComposition: true,
+                        // 教务/门户偶有 http 资源，允许混合内容，否则页面部分空白
+                        mixedContentMode:
+                            MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
+                        // 支持缩放，页面太宽时可放大看清
+                        supportZoom: true,
+                        builtInZoomControls: true,
+                        displayZoomControls: false,
+                        useWideViewPort: true,
+                        loadWithOverviewMode: true,
+                        // iOS 允许内联播放，避免白/黑屏
+                        allowsInlineMediaPlayback: true,
+                        transparentBackground: false,
+                      ),
+                      onWebViewCreated: (c) => _controller = c,
+                      onProgressChanged: (c, p) {
+                        setState(() => _progress = p / 100);
+                      },
+                      onReceivedError: (c, req, err) {
+                        // 打印错误便于排查（如证书、网络）
+                        debugPrint(
+                            'WebView error: ${err.type} ${err.description}');
+                      },
+                      onReceivedHttpError: (c, req, resp) {
+                        debugPrint('WebView http error: ${resp.statusCode}');
+                      },
+                      // 忽略自签名/证书告警，避免因证书问题导致空白
+                      onReceivedServerTrustAuthRequest: (c, challenge) async {
+                        return ServerTrustAuthResponse(
+                          action: ServerTrustAuthResponseAction.PROCEED,
+                        );
+                      },
+                      onLoadStop: (c, url) async {
+                        if (url != null) await _onUrl(url.toString(), c);
+                      },
+                      onUpdateVisitedHistory: (c, url, _) async {
+                        if (url != null) await _onUrl(url.toString(), c);
+                      },
+                    ),
                   ),
-                  onWebViewCreated: (c) => _controller = c,
-                  onProgressChanged: (c, p) {
-                    setState(() => _progress = p / 100);
-                  },
-                  onReceivedError: (c, req, err) {
-                    // 打印错误便于排查（如证书、网络）
-                    debugPrint('WebView error: ${err.type} ${err.description}');
-                  },
-                  onReceivedHttpError: (c, req, resp) {
-                    debugPrint('WebView http error: ${resp.statusCode}');
-                  },
-                  // 忽略自签名/证书告警，避免因证书问题导致空白
-                  onReceivedServerTrustAuthRequest: (c, challenge) async {
-                    return ServerTrustAuthResponse(
-                      action: ServerTrustAuthResponseAction.PROCEED,
-                    );
-                  },
-                  onLoadStop: (c, url) async {
-                    if (url != null) await _onUrl(url.toString(), c);
-                  },
-                  onUpdateVisitedHistory: (c, url, _) async {
-                    if (url != null) await _onUrl(url.toString(), c);
-                  },
                 ),
               ),
             ],
           ),
-          // 自动模式：网页就绪前一直盖着，只有自动登录没成功才撤掉
-          if (widget.auto && !_webVisible) _buildLoginCover(),
+          // 自动模式：网页透明的同时再盖一层，用户看到的是"正在登录"的转圈框。
+          // 两层是有分工的：Opacity 负责"绝对不漏"（含 platform view 那一帧），
+          // 这层负责转圈的界面。只有自动登录没成功才撤掉。
+          if (!_showWeb) _buildLoginCover(),
         ],
       ),
     );
