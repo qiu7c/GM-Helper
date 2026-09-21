@@ -57,6 +57,9 @@ class _LoginPageState extends State<LoginPage> {
   /// 自动填充时两个输入框的实际长度（如 "账号10/密码8"），用于排错
   String _fillState = '';
 
+  /// 登录页里相关输入框的真实结构（自动填充失败时回显，便于定位问题）
+  String _domDump = '';
+
   @override
   void initState() {
     super.initState();
@@ -117,12 +120,17 @@ class _LoginPageState extends State<LoginPage> {
 
   /// 往登录页的两个输入框写入账号密码，然后点它自己的登录按钮。
   ///
-  /// 两个坑：
+  /// 三个坑：
   ///  1. 必须**点按钮**而不是 form.submit()，因为密码加密是在按钮的点击
   ///     处理器里做的，直接提交会把明文发过去。
-  ///  2. 不少登录页会清空密码框（防自动填充），或者给密码框加 readonly。
-  ///     所以填完要**当场回读校验**，两格都有值才提交；否则不提交，稍后重试，
-  ///     免得拿空密码去撞把账号锁了。
+  ///  2. 页面上可能有多个 id/name 叫 password 的元素（含隐藏的），
+  ///     必须挑**可见且可用**的那个，否则写进了隐藏框、看着还是空的。
+  ///  3. 有些页面在 input 事件里就把密码清掉（反自动填充）——
+  ///     所以先**不发任何事件**只写值，页面的提交处理器本来就是直接读
+  ///     .value，不需要事件；写不进去才补发 input/change 再试。
+  ///
+  /// 填完当场回读校验，两格都有值才提交；否则不提交、稍后重试，
+  /// 免得拿空密码反复提交把账号锁了。
   Future<void> _autoFill(InAppWebViewController c) async {
     if (_autoSubmitted || _autoBusy) return;
     // 重试到头仍没填进去：明确告诉用户手动接管，别让他干等
@@ -138,17 +146,85 @@ class _LoginPageState extends State<LoginPage> {
     try {
       final user = jsonEncode(widget.autoUsername);
       final pass = jsonEncode(widget.autoPassword);
-      final result = (await c.evaluateJavascript(source: '''
+      final raw = (await c.evaluateJavascript(source: '''
         (function () {
-          var u = document.querySelector('#username')
-               || document.querySelector('input[name="username"]');
-          var p = document.querySelector('#password')
-               || document.querySelector('input[name="password"]');
-          if (!u || !p) return 'NOFORM';
+          function isVisible(el) {
+            if (!el || el.disabled) return false;
+            var r = el.getBoundingClientRect();
+            if (!r || r.width <= 0 || r.height <= 0) return false;
+            var s = window.getComputedStyle(el);
+            if (!s || s.display === 'none' || s.visibility === 'hidden') return false;
+            return true;
+          }
+          function desc(el) {
+            if (!el) return 'null';
+            return el.tagName.toLowerCase()
+              + ' #' + (el.id || '-')
+              + ' name=' + (el.getAttribute('name') || '-')
+              + ' type=' + (el.getAttribute('type') || '-')
+              + ' vis=' + (isVisible(el) ? '1' : '0')
+              + ' dis=' + (el.disabled ? '1' : '0')
+              + ' ro=' + (el.readOnly ? '1' : '0');
+          }
 
-          function setVal(el, v) {
-            try { el.removeAttribute('readonly'); } catch (e) {}
-            try { el.focus(); } catch (e) {}
+          // 只看登录表单内部，避免误伤页面上其它表单
+          var form = document.querySelector('#casLoginForm')
+                  || document.querySelector('form');
+          var scope = form || document;
+          var all = scope.querySelectorAll('input');
+
+          // 诊断用：把和登录相关的输入框原样报回去（整个文档，不限表单内）
+          var dump = [];
+          var dumpInputs = document.querySelectorAll('input');
+          for (var i = 0; i < dumpInputs.length; i++) {
+            var e = dumpInputs[i];
+            var t = (e.getAttribute('type') || 'text').toLowerCase();
+            var idn = (e.id || '') + ' ' + (e.getAttribute('name') || '');
+            if (t === 'password' || t === 'text' || t === 'email' || t === 'tel'
+                || /pass|pwd|user|account|login|encrypt|mobile|phone/i.test(idn)) {
+              dump.push(desc(e));
+            }
+          }
+
+          // 用户名：表单内可见的优先，没有可见的才退回第一个
+          function pick(match) {
+            var fallback = null;
+            for (var i = 0; i < all.length; i++) {
+              if (!match(all[i])) continue;
+              if (isVisible(all[i])) return all[i];
+              if (!fallback) fallback = all[i];
+            }
+            return fallback;
+          }
+          var u = pick(function (e) {
+            return e.id === 'username' || e.getAttribute('name') === 'username';
+          });
+
+          // 密码：这个页面把「看得见的输入框」和「真正提交的隐藏框」分开了 ——
+          //   #mobilePassword         type=password，看得见，没有 name，不参与提交
+          //   #mobilePasswordEncrypt  name=password，display:none，提交的是它，
+          //                           值由页面的加密逻辑用 pwdDefaultEncryptSalt 算出
+          // 所以只写看得见的那个，再补发页面自己的事件让加密跑起来；
+          // 绝不能往隐藏的加密框里写明文，那会把正确的密文覆盖掉。
+          function isPwd(el) {
+            var t = (el.getAttribute('type') || '').toLowerCase();
+            return t === 'password' || el.id === 'password'
+                || el.getAttribute('name') === 'password';
+          }
+          var enc = document.querySelector('input[name="password"]'); // 隐藏的密文框
+          if (enc && isVisible(enc)) enc = null; // 真看得见就不是密文框
+          var pwds = [];
+          for (var i = 0; i < dumpInputs.length; i++) {
+            if (dumpInputs[i] !== enc && isPwd(dumpInputs[i])) pwds.push(dumpInputs[i]);
+          }
+          var pv = null;
+          for (var i = 0; i < pwds.length; i++) {
+            if (isVisible(pwds[i])) { pv = pwds[i]; break; }
+          }
+
+          function write(el, v, doFocus) {
+            try { el.readOnly = false; el.removeAttribute('readonly'); } catch (e) {}
+            if (doFocus !== false) { try { el.focus(); } catch (e) {} }
             try {
               var d = Object.getOwnPropertyDescriptor(
                   el.constructor.prototype, 'value');
@@ -157,39 +233,82 @@ class _LoginPageState extends State<LoginPage> {
             if (el.value !== v) {
               try { el.setAttribute('value', v); } catch (e) {}
             }
-            // 只发 input/change。不要发 blur：有些登录页在失焦时会清空密码框。
+            return el.value === v;
+          }
+          // 只写值，不发事件（屏幕上立刻显示出来，不惊动页面的监听）
+          function quiet(el, v, doFocus) { return write(el, v, doFocus); }
+          // 写值并补发 input/change（给需要事件的框架用）
+          function noisy(el, v, doFocus) {
+            write(el, v, doFocus);
             el.dispatchEvent(new Event('input',  { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
             return el.value === v;
           }
+          // 只补发事件、不写值（触发页面自己的逻辑，比如把密码加密进隐藏框）
+          function fire(el, type) {
+            try { el.dispatchEvent(new Event(type, { bubbles: true })); } catch (e) {}
+          }
 
-          var okU = setVal(u, $user);
-          var okP = setVal(p, $pass);
-          // 被清掉就同步再写一次（不给页面的定时器留机会）
-          if (!okP) { okP = setVal(p, $pass); }
-          if (!okU) { okU = setVal(u, $user); }
-
-          var state = '账号' + (u.value ? u.value.length : 0) +
-                      '/密码' + (p.value ? p.value.length : 0);
-          if (!okP || !u.value || !p.value) return 'PWDFAIL:' + state;
-
-          var btn = document.querySelector('#loginButton')
-                 || document.querySelector('#submitBtn')
-                 || document.querySelector('button[type="submit"]')
-                 || document.querySelector('input[type="submit"]');
-          if (!btn) return 'NOBTN:' + state;
-
-          btn.click();
-          return 'CLICKED:' + state;
+          var st = 'OK';
+          var state = '';
+          if (!u || !pv) {
+            st = 'NOFORM';
+          } else {
+            // 用户名：写值 + 发事件，和人手动输入的效果一致
+            noisy(u, $user);
+            // 密码：先静默写（屏幕上直接出现），验证确实写进去了
+            var okP = quiet(pv, $pass);
+            if (!okP) okP = noisy(pv, $pass);
+            // 补发页面自己的事件，让它的加密逻辑把密文写进隐藏框
+            fire(pv, 'input'); fire(pv, 'change'); fire(pv, 'keyup');
+            if (enc && !enc.value) fire(pv, 'blur');
+            // 有的页面会在失焦后清空明文（防明文残留）。提交前重新查一遍，把看得见的
+            // 那个再补一次：既让用户看得见，也让"提交时现读现加密"的页面拿得到密码。
+            // 这次不再抢焦点（避免反复弹出软键盘）。
+            var fresh = document.querySelectorAll('input');
+            for (var k = 0; k < fresh.length; k++) {
+              var fe = fresh[k];
+              if (fe === enc || !isPwd(fe) || !isVisible(fe)) continue;
+              if (fe.value !== $pass) okP = quiet(fe, $pass, false) || okP;
+              pv = fe;
+              break;
+            }
+            // 密文长度是个关键线索：0 说明页面的加密还没跑（它会在提交时现算）
+            state = '账号' + (u.value ? u.value.length : 0)
+                  + '/密码' + (pv.value ? pv.value.length : 0)
+                  + '/密文' + (enc ? (enc.value ? enc.value.length : 0) : -1);
+            if (!okP || !u.value || !pv.value) {
+              st = 'PWDFAIL';
+            } else {
+              var btn = document.querySelector('#loginButton')
+                     || document.querySelector('#submitBtn')
+                     || document.querySelector('#load')
+                     || document.querySelector('button[type="submit"]')
+                     || document.querySelector('input[type="submit"]');
+              if (!btn) { st = 'NOBTN'; }
+              else { btn.click(); st = 'CLICKED'; }
+            }
+          }
+          return JSON.stringify({ status: st, state: state, dump: dump.join(' | ') });
         })()
       '''))?.toString() ??
           '';
 
-      if (result.startsWith('CLICKED')) {
+      Map<String, dynamic> res = const <String, dynamic>{};
+      try {
+        res = (jsonDecode(raw) as Map).cast<String, dynamic>();
+      } catch (_) {
+        res = const <String, dynamic>{};
+      }
+      final status = (res['status'] ?? '').toString();
+      final dump = (res['dump'] ?? '').toString();
+      if (dump.isNotEmpty) _domDump = dump;
+
+      if (status == 'CLICKED') {
         _autoSubmitted = true;
         if (mounted) {
           setState(() {
-            _fillState = result.substring('CLICKED:'.length);
+            _fillState = (res['state'] ?? '').toString();
             _hint = '正在登录…';
           });
         }
@@ -198,8 +317,8 @@ class _LoginPageState extends State<LoginPage> {
       }
 
       // 没提交成功（页面没渲染完 / 密码被清空 / 找不到按钮）：稍后重试
-      if (result.startsWith('PWDFAIL')) {
-        _fillState = result.substring('PWDFAIL:'.length);
+      if ((res['state'] ?? '').toString().isNotEmpty) {
+        _fillState = (res['state'] ?? '').toString();
       }
       await Future<void>.delayed(const Duration(milliseconds: 600));
       if (!mounted || _phase != _Phase.login || _autoSubmitted) return;
@@ -378,11 +497,31 @@ class _LoginPageState extends State<LoginPage> {
               width: double.infinity,
               color: Theme.of(context).colorScheme.surfaceContainerHighest,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              child: Text(
-                _autoSubmitted
-                    ? '已自动填入（$_fillState）并提交；若出现验证码，请在页面上输入后点「登录」。'
-                    : '正在自动填入账号密码…',
-                style: const TextStyle(fontSize: 13),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _autoSubmitted
+                        ? '已自动填入（$_fillState）并提交；若出现验证码，请在页面上输入后点「登录」。'
+                        : '正在自动填入账号密码…（$_fillState）',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  // 把登录页真实的输入框结构露出来，便于排错
+                  if (_domDump.isNotEmpty)
+                    ExpansionTile(
+                      tilePadding: EdgeInsets.zero,
+                      dense: true,
+                      title: const Text('查看登录页表单结构（排错用）',
+                          style: TextStyle(fontSize: 12, color: Colors.grey)),
+                      children: [
+                        SelectableText(
+                          _domDump,
+                          style: const TextStyle(
+                              fontSize: 11, fontFamily: 'monospace'),
+                        ),
+                      ],
+                    ),
+                ],
               ),
             ),
           Expanded(
