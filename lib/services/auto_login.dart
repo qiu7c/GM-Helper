@@ -71,8 +71,21 @@ class AutoLogin {
     if (!context.mounted) return const LoginResult.cancelled();
 
     final res = await Navigator.of(context).push<LoginResult>(
-      MaterialPageRoute(
-        builder: (_) => LoginPage(autoUsername: user, autoPassword: pwd),
+      // 自动登录全程**不占屏**。
+      //
+      // 关键在 `opaque: false`：路由不透明的话，这条登录页会盖住课表，用户
+      // 看到一个"正在登录"的界面 —— 而那正是要去掉的东西。透明路由下，用户
+      // 看到的始终是下面那一页（课表）自己的加载状态，直到自动登录成功、
+      // 或者出了问题需要他接管（见 LoginPage._reveal）才现出来。
+      //
+      // 过渡动画也设成 0：一个看不见的页面没什么好滑的，有动画反而会让下面
+      // 那一页跟着抖一下。
+      PageRouteBuilder<LoginResult>(
+        opaque: false,
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+        pageBuilder: (_, __, ___) =>
+            LoginPage(autoUsername: user, autoPassword: pwd),
       ),
     );
     final r = res ?? const LoginResult.cancelled();

@@ -116,11 +116,15 @@ class _LoginPageState extends State<LoginPage> {
   /// 一旦自动登录没成功就置为 true，让用户能在网页上手动接管。
   bool _webVisible = false;
 
-  /// 此刻网页该不该被看见。
+  /// 静默阶段：自动登录正在跑，而且还没到"必须让用户看见"的地步。
   ///
-  /// 只有自动模式才藏网页；另外两条路（扫码 initialUrl、选择登录方式）本来
-  /// 就要用户看着网页操作，一进来就是可见的。
-  bool get _showWeb => !widget.auto || _webVisible;
+  /// 这时候**整页什么都没有** —— 路由是透明的（见 [AutoLogin.attempt]），
+  /// 用户看到的是下面那一页（课表）自己的加载状态，而不是一个"正在登录"的
+  /// 界面。自动填充仍然照跑：WebView 有真实布局，只是不画出来。
+  ///
+  /// 另外两条路（扫码 [initialUrl]、选择登录方式）本来就要用户看着网页操作，
+  /// 一进来就是可见的，不走这里。
+  bool get _silent => widget.auto && !_webVisible;
 
   /// 最近一次拿到的页面地址，用来判断"点了登录却还停在认证页"
   String _lastUrl = '';
@@ -614,51 +618,94 @@ class _LoginPageState extends State<LoginPage> {
     return merged.entries.map((e) => '${e.key}=${e.value}').join('; ');
   }
 
-  /// 自动登录时盖在网页上的"正在登录"框。
+  /// 登录用的 WebView。
   ///
-  /// 藏网页本身是 [Opacity] 干的（见 InAppWebView 那里的注释）；这一层只负责
-  /// 转圈的界面。留它是因为：万一 platform view 还是漏出点什么，这层不透明的
-  /// 底能兜住，而且用户看到的就是个干净的登录中提示。
-  Widget _buildLoginCover() {
-    return Positioned.fill(
-      child: ColoredBox(
-        color: Theme.of(context).colorScheme.surface,
-        child: Center(
-          child: Card(
-            elevation: 3,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(36, 28, 36, 12),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const SizedBox(
-                    width: 34,
-                    height: 34,
-                    child: CircularProgressIndicator(strokeWidth: 3),
-                  ),
-                  const SizedBox(height: 18),
-                  const Text('正在登录…',
-                      style: TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.w500)),
-                  const SizedBox(height: 6),
-                  Text(_hint,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 12, color: Colors.grey)),
-                  if (_fillState.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(_fillState,
-                        style: const TextStyle(
-                            fontSize: 11, color: Colors.grey)),
-                  ],
-                  const SizedBox(height: 10),
-                  TextButton(
-                    onPressed: () => _reveal(hint: '请在此页面登录'),
-                    child: const Text('打开网页手动登录'),
-                  ),
-                ],
-              ),
-            ),
-          ),
+  /// 静默的时候靠外面套 [Opacity] 的 0 来"不画"，图片、进度条一概没有。
+  /// **绝不能**换成 Offstage / 尺寸 0 / `Visibility(visible:false)`：那三者会让
+  /// WebView 失去真实布局，`getBoundingClientRect()` 返回 0，自动填充直接失效
+  /// —— v1.0.4 的"密码填不进去"就是这么来的。Opacity 只影响绘制、不影响布局。
+  ///
+  /// 它也比"上面盖一层"更彻底：Android 上 WebView 是交给系统合成的 platform
+  /// view，只靠 Flutter 组件盖住，偶尔会漏出一帧（就是那一瞬间闪出来的网页）。
+  Widget _buildWebView() {
+    return InAppWebView(
+      key: ValueKey(_startUrl),
+      initialUrlRequest: URLRequest(url: WebUri(_startUrl!)),
+      initialSettings: InAppWebViewSettings(
+        userAgent:
+            'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/120 Mobile Safari/537.36',
+        javaScriptEnabled: true,
+        thirdPartyCookiesEnabled: true,
+        sharedCookiesEnabled: true,
+        // ↓↓ 修黑屏的关键设置 ↓↓
+        // Android 用混合合成，解决部分机型 WebView 全黑不渲染
+        useHybridComposition: true,
+        // 教务/门户偶有 http 资源，允许混合内容，否则页面部分空白
+        mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
+        // 支持缩放，页面太宽时可放大看清
+        supportZoom: true,
+        builtInZoomControls: true,
+        displayZoomControls: false,
+        useWideViewPort: true,
+        loadWithOverviewMode: true,
+        // iOS 允许内联播放，避免白/黑屏
+        allowsInlineMediaPlayback: true,
+        transparentBackground: false,
+      ),
+      onWebViewCreated: (c) => _controller = c,
+      onProgressChanged: (c, p) {
+        setState(() => _progress = p / 100);
+      },
+      onReceivedError: (c, req, err) {
+        // 打印错误便于排查（如证书、网络）
+        debugPrint('WebView error: ${err.type} ${err.description}');
+      },
+      onReceivedHttpError: (c, req, resp) {
+        debugPrint('WebView http error: ${resp.statusCode}');
+      },
+      // 忽略自签名/证书告警，避免因证书问题导致空白
+      onReceivedServerTrustAuthRequest: (c, challenge) async {
+        return ServerTrustAuthResponse(
+          action: ServerTrustAuthResponseAction.PROCEED,
+        );
+      },
+      onLoadStop: (c, url) async {
+        if (url != null) await _onUrl(url.toString(), c);
+      },
+      onUpdateVisitedHistory: (c, url, _) async {
+        if (url != null) await _onUrl(url.toString(), c);
+      },
+    );
+  }
+
+  /// 静默阶段的界面：**什么都没有**。
+  ///
+  /// 用户要的是"自动登录完全静默、没有任何界面"，所以这里不是"盖一层"，
+  /// 而是整页透明 + 不吃点击 —— 露出来的是下面那一页（课表）自己的加载状态。
+  /// 配合 [AutoLogin.attempt] 里那个 `opaque: false` 的路由，
+  /// 从打开 App 到进课表，全程不会闪出任何登录界面。
+  ///
+  /// 两条纪律：
+  ///  - 整页 [IgnorePointer]：透明的页面绝不能偷吃点击，否则用户在课表上
+  ///    划不动、点不动，感觉像卡死。
+  ///  - 吞掉返回键，改成"把网页露出来"：自动登录要是慢了，用户会本能地按
+  ///    返回，而在这一页按返回 = 取消自动登录 = 弹出账号密码登录页 ——
+  ///    那正是用户抱怨的那个界面。按一下先让他看看到底卡在哪，再按一下才是
+  ///    真的取消。
+  Widget _buildSilentBody() {
+    // 泛型要跟所在的 Route 对上（这里是 PageRouteBuilder<LoginResult>），
+    // 对不上在 debug 下会触发断言。
+    return PopScope<LoginResult>(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _reveal(hint: '请在页面上完成登录');
+      },
+      child: IgnorePointer(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: Opacity(opacity: 0, child: _buildWebView()),
         ),
       ),
     );
@@ -720,6 +767,10 @@ class _LoginPageState extends State<LoginPage> {
       );
     }
 
+    // 静默阶段：整页透明、不吃点击。用户看到的是下面那一页（课表）自己的
+    // 加载状态 —— 自动登录不该占屏，更不该闪出一个登录界面。
+    if (_silent) return _buildSilentBody();
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_hint),
@@ -749,134 +800,62 @@ class _LoginPageState extends State<LoginPage> {
               : const SizedBox(height: 3),
         ),
       ),
-      body: Stack(
+      body: Column(
         children: [
-          Column(
-            children: [
-              if (_pageError != null)
-                Container(
-                  width: double.infinity,
-                  color: Colors.redAccent.withOpacity(0.12),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.error_outline,
-                          size: 18, color: Colors.redAccent),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(_pageError!,
-                            style: const TextStyle(
-                                fontSize: 13, color: Colors.redAccent)),
-                      ),
-                    ],
+          if (_pageError != null)
+            Container(
+              width: double.infinity,
+              color: Colors.redAccent.withOpacity(0.12),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline,
+                      size: 18, color: Colors.redAccent),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(_pageError!,
+                        style: const TextStyle(
+                            fontSize: 13, color: Colors.redAccent)),
                   ),
-                )
-              else if (widget.auto)
-                Container(
-                  width: double.infinity,
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _autoSubmitted
-                            ? '已自动填入（$_fillState）并提交；若出现验证码，请在页面上输入后点「登录」。'
-                            : '正在自动填入账号密码…（$_fillState）',
-                        style: const TextStyle(fontSize: 13),
-                      ),
-                      // 把登录页真实的输入框结构露出来，便于排错
-                      if (_domDump.isNotEmpty)
-                        ExpansionTile(
-                          tilePadding: EdgeInsets.zero,
-                          dense: true,
-                          title: const Text('查看登录页表单结构（排错用）',
-                              style: TextStyle(fontSize: 12, color: Colors.grey)),
-                          children: [
-                            SelectableText(
-                              _domDump,
-                              style: const TextStyle(
-                                  fontSize: 11, fontFamily: 'monospace'),
-                            ),
-                          ],
-                        ),
-                    ],
-                  ),
-                ),
-              Expanded(
-                // 藏网页靠的是**把 WebView 自己设成透明**，不是靠上面那层盖住。
-                // Android 上 WebView 是交给系统合成的 platform view，光盖一层
-                // Flutter 组件偶尔会漏出一帧（就是那一瞬间闪出来的网页）。
-                // Opacity 只影响绘制、不影响布局，所以 WebView 仍有真实尺寸、
-                // JS 照跑，getBoundingClientRect 也照常返回值 —— 自动填充不受影响。
-                //
-                // 千万不能用 Offstage / 尺寸 0 / Visibility(visible:false)：
-                // 那样 WebView 没有真实布局，会重蹈 v1.0.4 "密码填不进去"的坑。
-                child: IgnorePointer(
-                  // 看不见的时候别让它偷吃点击
-                  ignoring: !_showWeb,
-                  child: Opacity(
-                    opacity: _showWeb ? 1 : 0,
-                    child: InAppWebView(
-                      key: ValueKey(_startUrl),
-                      initialUrlRequest: URLRequest(url: WebUri(_startUrl!)),
-                      initialSettings: InAppWebViewSettings(
-                        userAgent:
-                            'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 '
-                            '(KHTML, like Gecko) Chrome/120 Mobile Safari/537.36',
-                        javaScriptEnabled: true,
-                        thirdPartyCookiesEnabled: true,
-                        sharedCookiesEnabled: true,
-                        // ↓↓ 修黑屏的关键设置 ↓↓
-                        // Android 用混合合成，解决部分机型 WebView 全黑不渲染
-                        useHybridComposition: true,
-                        // 教务/门户偶有 http 资源，允许混合内容，否则页面部分空白
-                        mixedContentMode:
-                            MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
-                        // 支持缩放，页面太宽时可放大看清
-                        supportZoom: true,
-                        builtInZoomControls: true,
-                        displayZoomControls: false,
-                        useWideViewPort: true,
-                        loadWithOverviewMode: true,
-                        // iOS 允许内联播放，避免白/黑屏
-                        allowsInlineMediaPlayback: true,
-                        transparentBackground: false,
-                      ),
-                      onWebViewCreated: (c) => _controller = c,
-                      onProgressChanged: (c, p) {
-                        setState(() => _progress = p / 100);
-                      },
-                      onReceivedError: (c, req, err) {
-                        // 打印错误便于排查（如证书、网络）
-                        debugPrint(
-                            'WebView error: ${err.type} ${err.description}');
-                      },
-                      onReceivedHttpError: (c, req, resp) {
-                        debugPrint('WebView http error: ${resp.statusCode}');
-                      },
-                      // 忽略自签名/证书告警，避免因证书问题导致空白
-                      onReceivedServerTrustAuthRequest: (c, challenge) async {
-                        return ServerTrustAuthResponse(
-                          action: ServerTrustAuthResponseAction.PROCEED,
-                        );
-                      },
-                      onLoadStop: (c, url) async {
-                        if (url != null) await _onUrl(url.toString(), c);
-                      },
-                      onUpdateVisitedHistory: (c, url, _) async {
-                        if (url != null) await _onUrl(url.toString(), c);
-                      },
-                    ),
-                  ),
-                ),
+                ],
               ),
-            ],
-          ),
-          // 自动模式：网页透明的同时再盖一层，用户看到的是"正在登录"的转圈框。
-          // 两层是有分工的：Opacity 负责"绝对不漏"（含 platform view 那一帧），
-          // 这层负责转圈的界面。只有自动登录没成功才撤掉。
-          if (!_showWeb) _buildLoginCover(),
+            )
+          else if (widget.auto)
+            Container(
+              width: double.infinity,
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _autoSubmitted
+                        ? '已自动填入（$_fillState）并提交；若出现验证码，请在页面上输入后点「登录」。'
+                        : '正在自动填入账号密码…（$_fillState）',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  // 把登录页真实的输入框结构露出来，便于排错
+                  if (_domDump.isNotEmpty)
+                    ExpansionTile(
+                      tilePadding: EdgeInsets.zero,
+                      dense: true,
+                      title: const Text('查看登录页表单结构（排错用）',
+                          style: TextStyle(fontSize: 12, color: Colors.grey)),
+                      children: [
+                        SelectableText(
+                          _domDump,
+                          style: const TextStyle(
+                              fontSize: 11, fontFamily: 'monospace'),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ),
+          // 走到这里网页一定是可见的：静默那种情况在上面就 return 掉了
+          Expanded(child: _buildWebView()),
         ],
       ),
     );
