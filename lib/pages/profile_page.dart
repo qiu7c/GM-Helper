@@ -87,8 +87,18 @@ class _ProfilePageState extends State<ProfilePage> {
         _checkSeq++;
         // 会话过期不是用户主动退出：课表缓存留着（见 AuthStore.clearSession），
         // 否则重登之前打开课表页会是一片空白。
-        await AuthStore.clearSession();
+        //
+        // 带上这张失败的票：本页和课表页在同一个 IndexedStack 里，启动时
+        // 同时发请求、同时判出失效。要是课表页那边已经先一步自动重登、换上
+        // 新票，这里再去清就会把**刚存进来的新票删掉**，等于把用户从已经登好
+        // 的状态里踢出去，只能手动登录。
+        final cleared = await AuthStore.clearSession(failedCookie: cookie);
         if (!mounted) return;
+        if (!cleared) {
+          // 票换新了，这次失效作废：拿新票重查一次
+          _check();
+          return;
+        }
         setState(() => _status = _Status.loggedOut);
       } else {
         setState(() => _status = _Status.loggedIn);

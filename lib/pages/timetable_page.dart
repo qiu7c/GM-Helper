@@ -177,7 +177,19 @@ class _TimetablePageState extends State<TimetablePage> {
         _loadSeq++;
         // 只清 Cookie，课表缓存留着：会话过期不代表那学期的课表变了，
         // 用户在看到登录页之前至少还有课表可看（见 AuthStore.clearSession）。
-        await AuthStore.clearSession();
+        //
+        // 带上这张失败的票去清：如果「我的」页那边（同一个 IndexedStack，
+        // 启动时同时发请求）已经先一步自动重登、换上了新票，这里就什么都
+        // 不该清 —— 否则会把刚存进来的新票删掉，用户被无谓地踢去手动登录。
+        final cleared = await AuthStore.clearSession(failedCookie: cookie);
+        // 这里不能再比 seq：上面刚 _loadSeq++ 过，等于必然不等。
+        // 真正要防的只是"清的过程中页面被销毁"。
+        if (!mounted) return;
+        if (!cleared) {
+          // 票已经换新了，这次失效是过期的旧消息：拿新票重来一次就好
+          _load(keepSelection: true);
+          return;
+        }
         _goLogin();
         return;
       }

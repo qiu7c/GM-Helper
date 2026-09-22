@@ -38,13 +38,32 @@ class AuthStore {
   /// 登录之前至少还能看到自己的课表，而不是打开 App 一片空白。
   ///
   /// 换账号也不会串味：缓存的 key 里带着用户名（见 [ScheduleCache]）。
-  static Future<void> clearSession() async {
+  ///
+  /// [failedCookie] 是"刚才那次请求用的是哪张票"。传了它就做一次比对：
+  /// **只有存着的还是同一张时才删**。返回是否真的清了。
+  ///
+  /// 为什么要比对：课表页和「我的」页装在同一个 `IndexedStack` 里，
+  /// 启动时**两边会同时各发一轮请求**，用的是同一张过期的票，也就会前后脚
+  /// 都判出会话失效。先手那边会弹出自动登录、重新存一张新票；后手那边要是
+  /// 无脑删，删掉的就是**刚存进来的那张新票**。用户看到的就是：「自动重登
+  /// 明明成功了，转脸又被踢到账号密码登录页」—— 而自动登录一次启动只允许
+  /// 试一次，于是只能手动点登录才进得去。
+  ///
+  /// 返回 false 表示"票已经被人换新了，这次失效是过期的旧消息"，
+  /// 调用方这时**不该**再去弹登录页。
+  static Future<bool> clearSession({String? failedCookie}) async {
     final sp = await SharedPreferences.getInstance();
+    final cur = sp.getString(_kCookie);
+    if (failedCookie != null && cur != null && cur != failedCookie) {
+      return false;
+    }
     await sp.remove(_kCookie);
     authRevision.value++;
+    return true;
   }
 
   /// 用户主动点「退出登录」：连课表缓存一起清掉。
+  /// 不传 [failedCookie]（比对只在"被动失效"时有意义，退出是用户的本意）。
   static Future<void> clear() async {
     await clearSession();
     await ScheduleCache.clear();
