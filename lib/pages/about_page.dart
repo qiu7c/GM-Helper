@@ -15,6 +15,8 @@ class AboutPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final subFg = theme.colorScheme.onSurfaceVariant;
     return Scaffold(
       appBar: AppBar(title: const Text('关于')),
       body: ListView(
@@ -22,15 +24,13 @@ class AboutPage extends StatelessWidget {
           const SizedBox(height: 32),
           Image.asset('assets/icon/app_logo.png', width: 88, height: 88),
           const SizedBox(height: 12),
-          const Center(
-            child: Text('GMPluse',
-                style:
-                    TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+          Center(
+            child: Text('GMPluse', style: theme.textTheme.headlineSmall),
           ),
           const SizedBox(height: 4),
           Center(
             child: Text('版本 ${AppInfo.version}',
-                style: const TextStyle(color: Colors.grey)),
+                style: TextStyle(color: subFg)),
           ),
           const SizedBox(height: 32),
           const ListTile(
@@ -61,36 +61,36 @@ class AboutPage extends StatelessWidget {
                 '通过统一身份认证登录，直连教务系统获取课表与学籍数据'),
           ),
           const Divider(),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
             child: Text('使用声明',
                 style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.bold,
-                    color: Colors.grey)),
+                    color: subFg)),
           ),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
             child: Text(
               '本应用仅供自己使用，用于查看个人课表，不用于任何商业用途。'
               '课表及学籍数据均来自广东工贸职业技术学院教务系统，'
               '仅在本机展示，不上传任何第三方服务器。',
-              style: TextStyle(color: Colors.grey, height: 1.6),
+              style: TextStyle(color: subFg, height: 1.6),
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Text('反馈与建议',
                 style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.bold,
-                    color: Colors.grey)),
+                    color: subFg)),
           ),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 0, 16, 24),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
             child: Text(
               '使用中遇到 bug，或想提新功能，都欢迎通过上方的邮箱 / QQ 联系我反馈。',
-              style: TextStyle(color: Colors.grey, height: 1.6),
+              style: TextStyle(color: subFg, height: 1.6),
             ),
           ),
         ],
@@ -104,7 +104,8 @@ class AboutPage extends StatelessWidget {
       leading: Icon(icon),
       title: Text(label),
       subtitle: Text(value),
-      trailing: const Icon(Icons.copy, size: 18, color: Colors.grey),
+      trailing: Icon(Icons.copy,
+          size: 18, color: Theme.of(context).colorScheme.onSurfaceVariant),
       onTap: () async {
         await Clipboard.setData(ClipboardData(text: value));
         if (context.mounted) {

@@ -42,6 +42,29 @@ class Course {
   /// 该课程是否在指定周上课
   bool activeInWeek(int week) => weeks.contains(week);
 
+  /// 周次的紧凑写法：连续的周合成区间，如 [3,4,5,6,10,11] -> "3-6,10-11"。
+  ///
+  /// 给整学期课表用：那个视图里一个格子可能叠着好几门课，不说清每门只上哪几周
+  /// 就完全看不懂为什么一个格子里挤了三门课。原始串（rawWeeks）长这样
+  /// "3-6,10-19(周)[01-02节]"，还得再剥一层，不如直接从 weeks 生成。
+  String get weekRange {
+    if (weeks.isEmpty) return '';
+    final sorted = [...weeks]..sort();
+    final parts = <String>[];
+    var start = sorted.first;
+    var prev = sorted.first;
+    for (final w in sorted.skip(1)) {
+      if (w == prev + 1) {
+        prev = w;
+        continue;
+      }
+      parts.add(start == prev ? '$start' : '$start-$prev');
+      start = prev = w;
+    }
+    parts.add(start == prev ? '$start' : '$start-$prev');
+    return parts.join(',');
+  }
+
   Map<String, dynamic> toJson() => {
         'name': name,
         'teacher': teacher,

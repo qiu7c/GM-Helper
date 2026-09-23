@@ -731,12 +731,12 @@ class _LoginPageState extends State<LoginPage> {
         children: [
           Image.asset('assets/icon/app_logo.png', width: 80, height: 80),
           const SizedBox(height: 12),
-          const Text('GMPluse',
-              style:
-                  TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+          Text('GMPluse',
+              style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: 8),
-          const Text('请选择登录方式',
-              style: TextStyle(color: Colors.grey)),
+          Text('请选择登录方式',
+              style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant)),
           const SizedBox(height: 32),
           SizedBox(
             width: double.infinity,
@@ -816,18 +816,21 @@ class _LoginPageState extends State<LoginPage> {
           if (_pageError != null)
             Container(
               width: double.infinity,
-              color: Colors.redAccent.withOpacity(0.12),
+              color: Theme.of(context).colorScheme.errorContainer,
               padding:
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               child: Row(
                 children: [
-                  const Icon(Icons.error_outline,
-                      size: 18, color: Colors.redAccent),
+                  Icon(Icons.error_outline,
+                      size: 18,
+                      color: Theme.of(context).colorScheme.onErrorContainer),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(_pageError!,
-                        style: const TextStyle(
-                            fontSize: 13, color: Colors.redAccent)),
+                        style: TextStyle(
+                            fontSize: 13,
+                            color:
+                                Theme.of(context).colorScheme.onErrorContainer)),
                   ),
                 ],
               ),
@@ -852,8 +855,12 @@ class _LoginPageState extends State<LoginPage> {
                     ExpansionTile(
                       tilePadding: EdgeInsets.zero,
                       dense: true,
-                      title: const Text('查看登录页表单结构（排错用）',
-                          style: TextStyle(fontSize: 12, color: Colors.grey)),
+                      title: Text('查看登录页表单结构（排错用）',
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant)),
                       children: [
                         SelectableText(
                           _domDump,

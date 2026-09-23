@@ -80,10 +80,10 @@ class AutoLogin {
       //
       // 过渡动画也设成 0：一个看不见的页面没什么好滑的，有动画反而会让下面
       // 那一页跟着抖一下。
-      PageRouteBuilder<LoginResult>(
-        opaque: false,
-        transitionDuration: Duration.zero,
-        reverseTransitionDuration: Duration.zero,
+      //
+      // 用 `_SilentLoginRoute` 而不是直接的 `PageRouteBuilder`：光有
+      // `opaque: false` 只做到"看得见"，底下那一页还是点不动。原因见那个类。
+      _SilentLoginRoute<LoginResult>(
         pageBuilder: (_, __, ___) =>
             LoginPage(autoUsername: user, autoPassword: pwd),
       ),
@@ -121,4 +121,37 @@ class AutoLogin {
         ) ??
         false;
   }
+}
+
+/// 静默登录专用的路由：`opaque: false` 让下面的课表继续可见，**而且不装遮罩**。
+///
+/// 为什么不能直接用 `PageRouteBuilder`：`ModalRoute.createOverlayEntries()` 里把
+/// 遮罩写死了，任何 `ModalRoute` 都一定会装一个 `ModalBarrier`（routes.dart:2052）。
+/// 而它在 3.24.5 里是 `RawGestureDetector(behavior: HitTestBehavior.opaque)`
+/// （modal_barrier.dart:448-451）—— `barrierColor: null` 只让它**看不见**，命中
+/// 判定照旧把事件全吃掉。更别扭的是 `ModalBarrier` 在 `dismissible == false` 时
+/// 把点击处理成 `SystemSound.play(SystemSoundType.alert)`
+/// （modal_barrier.dart:228-234，`PageRouteBuilder` 的 `barrierDismissible` 默认
+/// 正是 false）。
+///
+/// 于是自动登录那几秒的真实观感是：课表看得见、**却点不动也划不动，点一下还响
+/// 一声系统提示音** —— 就是「像卡死一样」。而这段代码的意图（见上面 `opaque`
+/// 那段注释）一直是"底下那一页继续可见**且可用**"，只是被遮罩挡掉了后半句。
+///
+/// 修法：覆写 `buildModalBarrier()` —— 它是 `ModalRoute` 上公开的方法，源码注释
+/// 写着 "subclasses can override this method to create their own barrier"。返回
+/// 一个零尺寸的盒子：不画、不挡。
+///
+/// 落回手动登录时 `LoginPage` 会整块换成可交互的界面（不再走 `_buildSilentBody`），
+/// 所以不存在"登录页露出来了但点不进去"的问题。
+class _SilentLoginRoute<T> extends PageRouteBuilder<T> {
+  _SilentLoginRoute({required super.pageBuilder})
+      : super(
+          opaque: false,
+          transitionDuration: Duration.zero,
+          reverseTransitionDuration: Duration.zero,
+        );
+
+  @override
+  Widget buildModalBarrier() => const SizedBox.shrink();
 }

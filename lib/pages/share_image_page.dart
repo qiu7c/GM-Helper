@@ -82,49 +82,56 @@ class _ShareImagePageState extends State<ShareImagePage> {
                       // 压在白底上会看不见。
                       child: Theme(
                         data: AppTheme.light(),
-                        child: Material(
-                          color: Colors.white,
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(14, 16, 14, 14),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Text(
-                                  '第 ${widget.week} 周',
-                                  style: const TextStyle(
-                                      fontSize: 22,
-                                      fontWeight: FontWeight.bold),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  '${monday.month}月${monday.day}日 - '
-                                  '${sunday.month}月${sunday.day}日',
-                                  style: const TextStyle(
-                                      fontSize: 12, color: Colors.grey),
-                                ),
-                                const SizedBox(height: 12),
-                                TimetableGrid(
-                                  courses: widget.courses,
-                                  week: widget.week,
-                                  campusId: widget.campusId,
-                                  embedded: true,
-                                  // 图片里点了没反应，但格子内部是 InkWell，
-                                  // 得给它一对回调
-                                  onTap: (_) {},
-                                  onLongPress: (_) {},
-                                ),
-                                const Divider(height: 20),
-                                const Text(
-                                  '由 GMPluse 导出',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                      fontSize: 10, color: Colors.grey),
-                                ),
-                              ],
+                        // 进到 Builder 里才读得到上面那层覆盖过的浅色主题 ——
+                        // 外面那个 context 拿到的还是 App 当前（可能是深色）的主题
+                        child: Builder(builder: (exportCtx) {
+                          final exportFg = Theme.of(exportCtx)
+                              .colorScheme
+                              .onSurfaceVariant;
+                          return Material(
+                            color: Colors.white,
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(14, 16, 14, 14),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Text(
+                                    '第 ${widget.week} 周',
+                                    style: const TextStyle(
+                                        fontSize: 22,
+                                        fontWeight: FontWeight.bold),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '${monday.month}月${monday.day}日 - '
+                                    '${sunday.month}月${sunday.day}日',
+                                    style: TextStyle(
+                                        fontSize: 12, color: exportFg),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  TimetableGrid(
+                                    courses: widget.courses,
+                                    week: widget.week,
+                                    campusId: widget.campusId,
+                                    embedded: true,
+                                    // 图片里点了没反应，但格子内部是 InkWell，
+                                    // 得给它一对回调
+                                    onTap: (_) {},
+                                    onLongPress: (_) {},
+                                  ),
+                                  const Divider(height: 20),
+                                  Text(
+                                    '由 GMPluse 导出',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                        fontSize: 10, color: exportFg),
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                        ),
+                          );
+                        }),
                       ),
                     ),
                   ),

@@ -150,15 +150,15 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
                   width: 80, height: 80),
             ),
             const SizedBox(height: 8),
-            const Center(
+            Center(
               child: Text('GMPluse',
-                  style:
-                      TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                  style: Theme.of(context).textTheme.headlineSmall),
             ),
             const SizedBox(height: 4),
-            const Center(
+            Center(
               child: Text('统一身份认证登录',
-                  style: TextStyle(color: Colors.grey)),
+                  style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant)),
             ),
             const SizedBox(height: 32),
             TextField(
@@ -232,7 +232,8 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
             if (_error != null) ...[
               const SizedBox(height: 16),
               Text(_error!,
-                  style: const TextStyle(color: Colors.redAccent)),
+                  style: TextStyle(
+                      color: Theme.of(context).colorScheme.error)),
             ],
             const SizedBox(height: 24),
             FilledButton(
@@ -240,11 +241,12 @@ class _PasswordLoginPageState extends State<PasswordLoginPage> {
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 child: _loginOpen
-                    ? const SizedBox(
+                    ? SizedBox(
                         width: 20,
                         height: 20,
                         child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white),
+                            strokeWidth: 2,
+                            color: Theme.of(context).colorScheme.onPrimary),
                       )
                     : const Text('登录', style: TextStyle(fontSize: 16)),
               ),

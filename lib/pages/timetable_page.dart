@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import '../config.dart';
 import '../models/course.dart';
-import '../models/period_time.dart';
 import '../services/auth_store.dart';
 import '../services/auto_login.dart';
 import '../services/course_notes.dart';
@@ -12,7 +11,9 @@ import '../services/schedule_cache.dart';
 import '../services/schedule_prefs.dart';
 import '../services/schedule_service.dart';
 import '../widgets/course_colors.dart';
+import '../widgets/glass.dart';
 import '../widgets/now_status_bar.dart';
+import '../widgets/skeleton.dart';
 import '../widgets/timetable_grid.dart';
 import 'semester_page.dart';
 import 'share_image_page.dart';
@@ -65,8 +66,19 @@ class _TimetablePageState extends State<TimetablePage> {
   /// 顶部那条「正在上什么课」跟着它走。
   ///
   /// 单开一个 notifier 而不是 setState：格子很重，为了翻一分钟重排整张课表不值当。
+  ///
+  /// 这条现在**还要驱动顶栏高度** —— 状态卡搬进了 `AppBar.bottom`，而 AppBar
+  /// 是在自己 build 的时候就把高度定死的，光让状态卡重建不够。所以下面 build()
+  /// 用它在整页外面包了一层。格子是纯 Stateless，重建只是把同一批 widget 描述
+  /// 重新 diff 一遍，不重新请求数据，20 秒一次可以接受。
   final ValueNotifier<DateTime> _clock = ValueNotifier(DateTime.now());
   Timer? _ticker;
+
+  /// `_staleBanner` 的高度，写死。
+  ///
+  /// 它也在 `AppBar.bottom` 里，所以高度必须是个常量：8+8 的上下内边距，加
+  /// 16 的内容（转圈和图标都是 16，文字比它矮）。
+  static const double _bannerHeight = 32;
 
   @override
   void initState() {
@@ -366,7 +378,10 @@ class _TimetablePageState extends State<TimetablePage> {
               ),
               child: Text('$w',
                   style: TextStyle(
-                    color: sel ? Colors.white : null,
+                    // 选中的那个压在实心主色上，得用 onPrimary
+                    color: sel
+                        ? Theme.of(context).colorScheme.onPrimary
+                        : null,
                     fontWeight: sel ? FontWeight.bold : FontWeight.normal,
                   )),
             ),
@@ -389,6 +404,8 @@ class _TimetablePageState extends State<TimetablePage> {
           courses: _result?.courses ?? const [],
           totalWeeks: _totalWeeks,
           currentWeek: SchedulePrefs.instance.currentWeek(),
+          // 整学期课表那面要按校区画左侧的节次时间
+          campusId: _campus,
         ),
       ),
     );
@@ -485,13 +502,30 @@ class _TimetablePageState extends State<TimetablePage> {
 
   @override
   Widget build(BuildContext context) {
+    // 整页跟着 20 秒的时钟走。原因见 `_clock` 的注释：状态卡搬进 AppBar.bottom
+    // 之后，顶栏的高度成了内容的一部分，而 AppBar 只在它自己 build 时才重新量
+    // —— 只让状态卡重建的话，课间那一刻档位从「上课中」跳到「下一节」，文字已经
+    // 换了、顶栏还是旧高度，中间会裂出一条缝。
+    return ValueListenableBuilder<DateTime>(
+      valueListenable: _clock,
+      builder: (context, now, _) => _scaffold(context, now),
+    );
+  }
+
+  Widget _scaffold(BuildContext context, DateTime now) {
     final curWeek = SchedulePrefs.instance.currentWeek();
     return Scaffold(
-      appBar: AppBar(
+      // 内容从玻璃顶栏**底下**穿过去。不然视口从顶栏下沿开始，玻璃背后是一块
+      // 纯色，模糊等于白做 —— 玻璃得背后有东西才看得出是玻璃。
+      extendBodyBehindAppBar: true,
+      appBar: glassAppBar(
+        context: context,
         // 刻意不用 leading/actions：那套是按各自宽度去抢地盘、再把 title 挤到
         // 剩下的空间里居中，右边图标一多就偏了。这里让 title 铺满整条，内部
         // 用两个**等宽**的 Expanded 夹住周切换器 —— 于是不管右边收进去几个
         // 功能，中间那一段始终落在屏幕正中。
+        //
+        // 这也是 glassAppBar 不能给这个页面传 leading/actions 的原因。
         automaticallyImplyLeading: false,
         titleSpacing: 0,
         title: Row(
@@ -550,58 +584,127 @@ class _TimetablePageState extends State<TimetablePage> {
             ),
           ],
         ),
+        bottom: _headerBottom(now),
       ),
       body: _buildBody(),
     );
   }
 
+  /// 顶栏底下那一块：缓存横幅 + 「现在在上什么」，两者都钉在玻璃上。
+  ///
+  /// 高度得自己报 —— `glassAppBar` 的 `flexibleSpace` 会盖住整个 AppBar 矩形
+  /// （含 `bottom`），所以这块的底色也是玻璃，课表从它下面穿过去。
+  PreferredSizeWidget _headerBottom(DateTime now) {
+    // 「现在在上什么」只在看本周时才有意义，翻到别的周就撤掉
+    final status = _week == SchedulePrefs.instance.currentWeek()
+        ? NowStatusBar(
+            courses: _visibleCourses,
+            now: now,
+            campusId: _campus,
+          )
+        : null;
+
+    // 高度直接问状态卡要 —— 它自己算的，跟它渲染出来的那个 SizedBox 是同一套
+    // 逻辑，不会两边算出两个数
+    final height =
+        (_fromCache ? _bannerHeight : 0.0) + (status?.preferredSize.height ?? 0.0);
+
+    return PreferredSize(
+      preferredSize: Size.fromHeight(height),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_fromCache) _staleBanner(),
+          if (status != null) status,
+        ],
+      ),
+    );
+  }
+
   Widget _buildBody() {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (_error != null) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(_error!, textAlign: TextAlign.center),
-            const SizedBox(height: 12),
-            FilledButton(
-              onPressed: () => _load(keepSelection: true),
-              child: const Text('重试'),
-            ),
-            TextButton(onPressed: _goLogin, child: const Text('重新登录')),
-          ],
-        ),
-      );
-    }
-    return Column(
-      children: [
-        if (_fromCache) _staleBanner(),
-        // 「现在在上什么」只在看本周时才有意义，翻到别的周就撤掉
-        if (_week == SchedulePrefs.instance.currentWeek())
-          ValueListenableBuilder<DateTime>(
-            valueListenable: _clock,
-            builder: (_, now, __) => NowStatusBar(
-              courses: _visibleCourses,
-              now: now,
-              campusId: _campus,
+    // 整块包一个 Builder：三个分支都要用 Scaffold **换过**的内边距（顶栏高度 +
+    // 悬浮底栏高度），而 `_buildBody()` 的 context 在 Scaffold 之上，读到的是
+    // 状态栏高度。Builder 在 Scaffold 之下，拿到的才是换好的那份。
+    return Builder(builder: (ctx) {
+      final media = MediaQuery.of(ctx);
+
+      if (_loading) {
+        // 骨架屏而不是屏幕正中一个转圈。这里传**整份** media.padding 而不是只让
+        // 开顶部：骨架屏外面的（顶栏 + 横幅 + 状态卡）加起来能到 200 出头，只留
+        // 顶部的话底下会多出半行灰块压在玻璃底栏上，而且行数是按可用高算的，
+        // 高估一行就多画一行。跟加载完的静止状态对齐。
+        return Padding(
+          padding: media.padding,
+          child: const TimetableSkeleton(),
+        );
+      }
+      if (_error != null) {
+        // 顶栏（玻璃 + 横幅 + 状态卡）现在最厚能到 200 出头，不自己让开的话
+        // 错误文案会藏在玻璃底下。Center 在让开之后的区域里居中。
+        return Padding(
+          padding: media.padding,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(_error!, textAlign: TextAlign.center),
+                const SizedBox(height: 12),
+                FilledButton(
+                  onPressed: () => _load(keepSelection: true),
+                  child: const Text('重试'),
+                ),
+                TextButton(onPressed: _goLogin, child: const Text('重新登录')),
+              ],
             ),
           ),
-        Expanded(
-          child: RefreshIndicator(
-            onRefresh: () => _load(keepSelection: true),
+        );
+      }
+      // 成功之后整页就是**一条**滚动。
+      //
+      // 缓存横幅和「现在在上什么」已经搬到顶栏的 `AppBar.bottom` 里了（见
+      // `_headerBottom`），这里千万不能再画一遍。搬走还有个几何上的必要性：只要
+      // 滚动视图上面还钉着东西，视口就从那块下面开始，课表永远穿不到玻璃底下。
+      return RefreshIndicator(
+        onRefresh: () => _load(keepSelection: true),
+        // 不偏这一下的话，下拉的转圈会出现在顶栏底下被挡住
+        edgeOffset: media.padding.top,
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          // SingleChildScrollView **不会**自己吃 MediaQuery 的内边距
+          // （只有 ListView/BoxScrollView 在 padding 为 null 时才吃），
+          // 所以这份要显式接上，否则内容会顶到状态栏和底栏底下
+          padding: media.padding,
+          child: AnimatedSwitcher(
+            // 翻周时淡入 + 轻微上移。key 只跟周次走：同一周内数据刷新（下拉
+            // 重载、后台更新）不重播，那时内容是"变"而不是"换了一页"。
+            duration: const Duration(milliseconds: 180),
+            switchInCurve: Curves.easeOut,
+            switchOutCurve: Curves.easeIn,
+            transitionBuilder: (child, anim) => FadeTransition(
+              opacity: anim,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  // 按自身高度的 3% 位移，换算到屏幕上是二十来像素
+                  begin: const Offset(0, 0.03),
+                  end: Offset.zero,
+                ).animate(anim),
+                child: child,
+              ),
+            ),
+            // embedded：滚动和内边距都由外面这层管了，网格只负责画自己
             child: TimetableGrid(
+              key: ValueKey<int>(_week),
               courses: _visibleCourses,
               week: _week,
               onTap: _showCourseDetail,
               onLongPress: _editNote,
               campusId: _campus,
+              embedded: true,
             ),
           ),
         ),
-      ],
-    );
+      );
+    });
   }
 
   /// 显示的是缓存内容时顶上挂的一条：点一下立刻重试
@@ -617,29 +720,41 @@ class _TimetablePageState extends State<TimetablePage> {
         ? (_loggingIn ? '登录已过期，正在自动重新登录…' : '正在更新课表…')
         : '$_staleReason，${_cacheHint()} · 点此重试';
 
-    return Material(
-      color: scheme.surfaceContainerHighest,
-      child: InkWell(
-        onTap: () => _load(keepSelection: true),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 16,
-                height: 16,
-                child: busy
-                    ? CircularProgressIndicator(
-                        strokeWidth: 2, color: scheme.primary)
-                    : const Icon(Icons.cloud_off,
-                        size: 16, color: Colors.grey),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(text,
-                    style: const TextStyle(fontSize: 12, color: Colors.grey)),
-              ),
-            ],
+    // 高度写死（见 `_bannerHeight`）：它住在 AppBar.bottom 里，顶栏的高度得在
+    // 建的时候就知道。内边距和内容都按这个数配的，SizedBox 是保证一致性的那一下。
+    return SizedBox(
+      height: _bannerHeight,
+      child: Material(
+        color: scheme.surfaceContainerHighest,
+        child: InkWell(
+          onTap: () => _load(keepSelection: true),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: busy
+                      ? CircularProgressIndicator(
+                          strokeWidth: 2, color: scheme.primary)
+                      : Icon(Icons.cloud_off,
+                          size: 16, color: scheme.onSurfaceVariant),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    text,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodySmall
+                        ?.copyWith(color: scheme.onSurfaceVariant),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -686,7 +801,9 @@ class _TimetablePageState extends State<TimetablePage> {
           if (CourseNotes.instance.hasNote(c.name))
             TextButton(
               onPressed: () => Navigator.pop(dialogCtx, '__delete__'),
-              child: const Text('删除', style: TextStyle(color: Colors.redAccent)),
+              child: Text('删除',
+                  style: TextStyle(
+                      color: Theme.of(dialogCtx).colorScheme.error)),
             ),
           TextButton(
             onPressed: () => Navigator.pop(dialogCtx),
@@ -740,7 +857,7 @@ class _TimetablePageState extends State<TimetablePage> {
                     CourseNotes.instance.hasNote(c.name)
                         ? Icons.edit_note
                         : Icons.note_add_outlined,
-                    color: Colors.grey,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                   onPressed: () {
                     Navigator.pop(context);
@@ -784,14 +901,15 @@ class _TimetablePageState extends State<TimetablePage> {
 
   Widget _detailRow(IconData icon, String label, String value) {
     if (value.isEmpty) return const SizedBox.shrink();
+    final subFg = Theme.of(context).colorScheme.onSurfaceVariant;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 18, color: Colors.grey),
+          Icon(icon, size: 18, color: subFg),
           const SizedBox(width: 10),
-          Text('$label：', style: const TextStyle(color: Colors.grey)),
+          Text('$label：', style: TextStyle(color: subFg)),
           Expanded(child: Text(value)),
         ],
       ),

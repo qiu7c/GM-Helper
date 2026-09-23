@@ -9,6 +9,7 @@ import '../services/profile_service.dart';
 import '../services/schedule_prefs.dart';
 import '../services/schedule_service.dart';
 import '../services/update_service.dart';
+import '../widgets/glass.dart';
 import 'about_page.dart';
 
 /// "我的"页：检查登录状态，展示详细学籍信息，选择学期/校区，退出登录。
@@ -172,6 +173,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
   Future<String?> _pickOption(
       String title, List<SelectOption> opts, String? current) {
+    final theme = Theme.of(context);
     return showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
@@ -181,13 +183,13 @@ class _ProfilePageState extends State<ProfilePage> {
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
             child: Text(title,
-                style: const TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.bold)),
+                style: theme.textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.bold)),
           ),
           ...opts.map((o) => ListTile(
                 title: Text(o.label),
                 trailing: o.value == current
-                    ? const Icon(Icons.check, color: Colors.green)
+                    ? Icon(Icons.check, color: theme.colorScheme.primary)
                     : null,
                 selected: o.value == current,
                 onTap: () => Navigator.pop(context, o.value),
@@ -208,29 +210,106 @@ class _ProfilePageState extends State<ProfilePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('我的')),
-      body: RefreshIndicator(
-        onRefresh: _check,
-        child: ListView(
-          children: [
-            const SizedBox(height: 24),
-            _header(),
-            const SizedBox(height: 24),
-            if (_status == _Status.loggedIn) ..._loggedInTiles(),
-            if (_status == _Status.loggedOut) _loginTile(),
-            const Divider(),
-            _updateTile(),
-            ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('关于'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const AboutPage()),
+      // 内容从玻璃顶栏**底下**穿过去，玻璃背后才有东西可模糊
+      extendBodyBehindAppBar: true,
+      appBar: glassAppBar(context: context, title: const Text('我的')),
+      body: Builder(
+        builder: (ctx) {
+          // ⚠ 必须在 Scaffold **之下**读：`build()` 的 context 在它上面，
+          // 拿到的是状态栏高度而不是顶栏高度
+          final media = MediaQuery.of(ctx);
+          return RefreshIndicator(
+            onRefresh: _check,
+            // 不偏这一下的话，下拉的转圈会出现在玻璃顶栏底下被挡住
+            edgeOffset: media.padding.top,
+            child: SingleChildScrollView(
+              // 内容比屏幕短时也要能下拉刷新
+              physics: const AlwaysScrollableScrollPhysics(),
+              // 这里显式传内边距。原来是 ListView 且不给 padding，它会自己吃掉
+              // MediaQuery 的那份（顶栏高度 + 悬浮底栏高度）——换成
+              // SingleChildScrollView 就不自动吃了，得自己接上，否则内容会顶到
+              // 状态栏和底栏底下
+              padding: media.padding,
+              // 用 Column 而不是 ListView：列表本身就一屏上下，不需要懒加载，而
+              // 懒加载的副作用是滚出屏幕的行会被销毁、滚回来重新入场 —— 那样每
+              // 上下滚一次就重播一遍淡入。Column 的 element 一直在，入场只播一次。
+              child: Column(
+                // 不 stretch 的话 Column 默认 center，ListTile 会被缩成内容宽
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: _entered([
+                  const SizedBox(height: 24),
+                  _header(),
+                  const SizedBox(height: 24),
+                  if (_status == _Status.loggedIn) ..._loggedInTiles(),
+                  if (_status == _Status.loggedOut) _loginTile(),
+                  const Divider(),
+                  _updateTile(),
+                  ListTile(
+                    leading: const Icon(Icons.info_outline),
+                    title: const Text('关于'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const AboutPage()),
+                    ),
+                  ),
+                ]),
               ),
             ),
-          ],
+          );
+        },
+      ),
+    );
+  }
+
+  // ---------- 入场 ----------
+  //
+  // 每行往上挪 8px + 淡入，按序号依次错开。总时长压在 460ms：前 6 行逐步跟上来，
+  // 再往后的行不再往后推 —— 学籍信息可能有十几条，一路 35ms 错下去最后一行要等
+  // 大半秒才出现，那就不是"入场"是"加载慢"了。
+
+  static const Duration _enterTotal = Duration(milliseconds: 460);
+  static const Duration _enterFade = Duration(milliseconds: 240);
+  static const Duration _enterStep = Duration(milliseconds: 35);
+  static const int _enterMaxStep = 6;
+
+  /// 给列表每一项套上入场动画。纯占位的间距和分割线不算进度，跳过它们。
+  List<Widget> _entered(List<Widget> children) {
+    final out = <Widget>[];
+    var i = 0;
+    for (final c in children) {
+      if (c is SizedBox || c is Divider) {
+        out.add(c);
+      } else {
+        out.add(_enter(i++, c));
+      }
+    }
+    return out;
+  }
+
+  Widget _enter(int i, Widget child) {
+    final total = _enterTotal.inMilliseconds.toDouble();
+    final step = _enterStep.inMilliseconds *
+        (i < _enterMaxStep ? i : _enterMaxStep);
+    final start = step / total;
+    final end = (step + _enterFade.inMilliseconds) / total;
+
+    // 用一个共同时长 + 各自的 Interval 来错开，而不是给每行不同的 duration ——
+    // 那只会让后面的行播得慢，不是"依次开始"。
+    //
+    // TweenAnimationBuilder 只在 end 变了的时候才重播，所以 _check() 刷新列表
+    // 不会让整页重新入场；新插进来的行因为是新的 element，会正常入场。
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0, end: 1),
+      duration: _enterTotal,
+      curve: Interval(start, end, curve: Curves.easeOut),
+      builder: (_, t, inner) => Opacity(
+        opacity: t,
+        child: Transform.translate(
+          offset: Offset(0, 8 * (1 - t)),
+          child: inner,
         ),
       ),
+      child: child,
     );
   }
 
@@ -257,7 +336,7 @@ class _ProfilePageState extends State<ProfilePage> {
           : Text(
               AppInfo.version,
               style: TextStyle(
-                  color: up == null ? Colors.grey : scheme.primary),
+                  color: up == null ? scheme.onSurfaceVariant : scheme.primary),
             ),
       onTap: _checkingUpdate
           ? null
@@ -340,23 +419,25 @@ class _ProfilePageState extends State<ProfilePage> {
       return _profileHeader(_profile!);
     }
 
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     IconData icon;
     Color color;
     String text;
     switch (_status) {
       case _Status.checking:
         icon = Icons.hourglass_empty;
-        color = Colors.grey;
+        color = scheme.onSurfaceVariant;
         text = '正在检查登录状态…';
         break;
       case _Status.loggedIn:
         icon = Icons.check_circle;
-        color = Colors.green;
+        color = scheme.primary;
         text = '已登录';
         break;
       case _Status.loggedOut:
         icon = Icons.cancel;
-        color = Colors.redAccent;
+        color = scheme.error;
         text = '未登录';
         break;
     }
@@ -369,8 +450,8 @@ class _ProfilePageState extends State<ProfilePage> {
         ),
         const SizedBox(height: 12),
         Text(text,
-            style:
-                const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            style: theme.textTheme.titleLarge
+                ?.copyWith(fontWeight: FontWeight.bold)),
         if (_status == _Status.checking)
           const Padding(
             padding: EdgeInsets.only(top: 12),
@@ -384,20 +465,19 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Widget _profileHeader(Profile p) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     final name = p.name.isNotEmpty ? p.name : '同学';
     final initial = p.name.isNotEmpty ? p.name.characters.first : '?';
     return Column(
       children: [
         CircleAvatar(
           radius: 40,
-          backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+          backgroundColor: scheme.primaryContainer,
           child: Text(
             initial,
-            style: TextStyle(
-              fontSize: 32,
-              fontWeight: FontWeight.bold,
-              color: Theme.of(context).colorScheme.onPrimaryContainer,
-            ),
+            style: theme.textTheme.displaySmall
+                ?.copyWith(color: scheme.onPrimaryContainer),
           ),
         ),
         const SizedBox(height: 12),
@@ -408,13 +488,15 @@ class _ProfilePageState extends State<ProfilePage> {
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text('学号：${p.studentId}',
-                style: const TextStyle(color: Colors.grey, fontSize: 14)),
+                style: theme.textTheme.bodyLarge
+                    ?.copyWith(color: scheme.onSurfaceVariant)),
           ),
       ],
     );
   }
 
   List<Widget> _loggedInTiles() {
+    final scheme = Theme.of(context).colorScheme;
     final p = _profile;
     final fields = p?.fields ?? const <MapEntry<String, String>>[];
 
@@ -429,7 +511,7 @@ class _ProfilePageState extends State<ProfilePage> {
         title: const Text('学期'),
         subtitle: _terms.isEmpty ? const Text('登录后可选') : null,
         trailing: Text(_labelOf(_terms, _term, '默认'),
-            style: const TextStyle(color: Colors.grey)),
+            style: TextStyle(color: scheme.onSurfaceVariant)),
         onTap: _terms.isEmpty ? null : _pickTerm,
       ),
       ListTile(
@@ -437,7 +519,7 @@ class _ProfilePageState extends State<ProfilePage> {
         title: const Text('校区'),
         subtitle: _campuses.isEmpty ? const Text('登录后可选') : null,
         trailing: Text(_labelOf(_campuses, _campus, '默认'),
-            style: const TextStyle(color: Colors.grey)),
+            style: TextStyle(color: scheme.onSurfaceVariant)),
         onTap: _campuses.isEmpty ? null : _pickCampus,
       ),
       const Divider(),
@@ -452,9 +534,8 @@ class _ProfilePageState extends State<ProfilePage> {
         onTap: _check,
       ),
       ListTile(
-        leading: const Icon(Icons.logout, color: Colors.redAccent),
-        title: const Text('退出登录',
-            style: TextStyle(color: Colors.redAccent)),
+        leading: Icon(Icons.logout, color: scheme.error),
+        title: Text('退出登录', style: TextStyle(color: scheme.error)),
         onTap: _logout,
       ),
     ];
@@ -463,22 +544,24 @@ class _ProfilePageState extends State<ProfilePage> {
   /// 一条信息行：左图标+字段名，右值。值用 Expanded 占满剩余宽度，
   /// 避免此前放在 ListTile.trailing 里被挤成一列竖排的问题。
   Widget _infoRow(String label, String value) {
+    final theme = Theme.of(context);
+    final subFg = theme.colorScheme.onSurfaceVariant;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(_iconFor(label), size: 20, color: Colors.grey),
+          Icon(_iconFor(label), size: 20, color: subFg),
           const SizedBox(width: 16),
           SizedBox(
             width: 76,
             child: Text(label,
-                style: const TextStyle(color: Colors.grey, fontSize: 14)),
+                style: theme.textTheme.bodyLarge?.copyWith(color: subFg)),
           ),
           Expanded(
             child: Text(value,
                 textAlign: TextAlign.right,
-                style: const TextStyle(fontSize: 14)),
+                style: theme.textTheme.bodyLarge),
           ),
         ],
       ),
