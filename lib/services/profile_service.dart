@@ -34,6 +34,8 @@ class ProfileService {
       : _dio = Dio(BaseOptions(
           followRedirects: false,
           validateStatus: (s) => s != null && s < 500,
+          connectTimeout: AppConfig.connectTimeout,
+          receiveTimeout: AppConfig.receiveTimeout,
           headers: {
             'Cookie': cookie,
             'User-Agent':

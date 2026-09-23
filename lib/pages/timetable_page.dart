@@ -17,6 +17,11 @@ import '../widgets/timetable_grid.dart';
 import 'semester_page.dart';
 import 'share_image_page.dart';
 
+/// 顶栏「⋮」里收着的功能。
+///
+/// 按日期跳转**不在此列**：那个是高频操作，留在外面当图标。
+enum _More { semester, shareImage }
+
 class TimetablePage extends StatefulWidget {
   const TimetablePage({super.key});
 
@@ -36,6 +41,13 @@ class _TimetablePageState extends State<TimetablePage> {
 
   /// 登录页是否已经打开，避免重复弹（登录状态变化可能同时触发多条路径）
   bool _loginOpen = false;
+
+  /// 正在静默重登（也就是 _goLogin 里那段时间）。
+  ///
+  /// 静默登录那一层是 opacity:0 的，屏幕上一点变化都没有。横幅要是还写着
+  /// 「正在更新课表…」就是纯骗人 —— 这会儿根本没在更新课表，是在走一遍完整的
+  /// CAS 登录。这条状态就是让横幅能说实话。
+  bool _loggingIn = false;
 
   /// 加载轮次：并发/重入时只认最新那次的结果，避免旧响应把新数据盖回去
   int _loadSeq = 0;
@@ -264,6 +276,9 @@ class _TimetablePageState extends State<TimetablePage> {
   Future<void> _goLogin() async {
     if (!mounted || _loginOpen) return;
     _loginOpen = true;
+    // 让横幅改成"正在自动登录"。这段时间可能十几秒，而且屏幕上看不到任何东西，
+    // 不说清楚用户只会以为卡死了。
+    setState(() => _loggingIn = true);
     try {
       // 勾了「自动登录」就先悄悄登一次，不行再打登录页
       final ok = await AutoLogin.ensureLoggedIn(context);
@@ -281,6 +296,9 @@ class _TimetablePageState extends State<TimetablePage> {
       }
     } finally {
       _loginOpen = false;
+      // 走到这儿要么登录成了（接下来真是在更新课表），要么已经失败——
+      // 两种情况下"正在自动登录"都不再成立，横幅该换个说法了。
+      if (mounted) setState(() => _loggingIn = false);
     }
   }
 
@@ -392,55 +410,146 @@ class _TimetablePageState extends State<TimetablePage> {
     );
   }
 
+  /// 顶栏两侧图标按钮的宽度。左右都用它，中间那段才稳得住。
+  static const double _barButtonWidth = 40;
+
+  void _goWeek(int w) {
+    if (w == _week || w < 1 || w > _totalWeeks) return;
+    setState(() => _week = w);
+    _load(keepSelection: true);
+  }
+
+  /// 顶栏图标按钮：压到 40 宽（比默认的 48 窄），好给中间的周切换器让出地方
+  Widget _barButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback? onPressed,
+  }) {
+    return IconButton(
+      tooltip: tooltip,
+      iconSize: 20,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints.tightFor(
+          width: _barButtonWidth, height: kMinInteractiveDimension),
+      icon: Icon(icon),
+      onPressed: onPressed,
+    );
+  }
+
+  /// 周切换器：‹ 第 N 周 ›。宽度全由内容决定，外面用两个等宽的 Expanded 夹住它。
+  Widget _weekSwitcher() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _chevron(Icons.chevron_left, _week > 1 ? _prevWeek : null),
+        InkWell(
+          onTap: _pickWeek,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            child: Text('第 $_week 周',
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.bold)),
+          ),
+        ),
+        _chevron(Icons.chevron_right, _week < _totalWeeks ? _nextWeek : null),
+      ],
+    );
+  }
+
+  Widget _chevron(IconData icon, VoidCallback? onPressed) {
+    return IconButton(
+      iconSize: 20,
+      padding: EdgeInsets.zero,
+      constraints:
+          const BoxConstraints.tightFor(width: 32, height: kMinInteractiveDimension),
+      icon: Icon(icon),
+      onPressed: onPressed,
+    );
+  }
+
+  PopupMenuItem<_More> _menuItem(_More value, IconData icon, String label) {
+    return PopupMenuItem<_More>(
+      value: value,
+      // 还没有课表可看时这两项都没意义
+      enabled: _result != null,
+      child: Row(
+        children: [
+          Icon(icon, size: 20),
+          const SizedBox(width: 12),
+          Text(label),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final curWeek = SchedulePrefs.instance.currentWeek();
     return Scaffold(
       appBar: AppBar(
-        centerTitle: true,
+        // 刻意不用 leading/actions：那套是按各自宽度去抢地盘、再把 title 挤到
+        // 剩下的空间里居中，右边图标一多就偏了。这里让 title 铺满整条，内部
+        // 用两个**等宽**的 Expanded 夹住周切换器 —— 于是不管右边收进去几个
+        // 功能，中间那一段始终落在屏幕正中。
+        automaticallyImplyLeading: false,
         titleSpacing: 0,
         title: Row(
-          mainAxisSize: MainAxisSize.min,
           children: [
-            IconButton(
-              iconSize: 20,
-              icon: const Icon(Icons.chevron_left),
-              onPressed: _week > 1 ? _prevWeek : null,
-            ),
-            InkWell(
-              onTap: _pickWeek,
-              borderRadius: BorderRadius.circular(8),
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                child: Text('第 $_week 周',
-                    style: const TextStyle(
-                        fontSize: 17, fontWeight: FontWeight.bold)),
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: _barButton(
+                  icon: Icons.today_outlined,
+                  tooltip: '回到本周',
+                  // 已在本周就置灰：既是"你现在就在本周"的提示，也保证两侧
+                  // 宽度不随状态变化（一变中间就跟着偏）
+                  onPressed: _week == curWeek ? null : () => _goWeek(curWeek),
+                ),
               ),
             ),
-            IconButton(
-              iconSize: 20,
-              icon: const Icon(Icons.chevron_right),
-              onPressed: _week < _totalWeeks ? _nextWeek : null,
+            _weekSwitcher(),
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _barButton(
+                      icon: Icons.event_outlined,
+                      tooltip: '按日期跳转',
+                      onPressed: _pickDate,
+                    ),
+                    PopupMenuButton<_More>(
+                      tooltip: '更多',
+                      padding: EdgeInsets.zero,
+                      onSelected: (v) {
+                        if (v == _More.semester) {
+                          _openSemester();
+                        } else {
+                          _openShareImage();
+                        }
+                      },
+                      itemBuilder: (context) => [
+                        _menuItem(
+                            _More.semester, Icons.grid_view_outlined, '全学期总览'),
+                        _menuItem(_More.shareImage, Icons.ios_share, '导出图片'),
+                      ],
+                      // 用 child 而不是 icon：这样宽度由我们说了算，
+                      // 好跟左边那个按钮对齐（PopupMenuButton 默认跟着
+                      // IconButton 走，最小 48）
+                      child: const SizedBox(
+                        width: _barButtonWidth,
+                        height: kMinInteractiveDimension,
+                        child: Icon(Icons.more_vert, size: 20),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ],
         ),
-        actions: [
-          IconButton(
-            tooltip: '按日期跳转',
-            icon: const Icon(Icons.event),
-            onPressed: _pickDate,
-          ),
-          IconButton(
-            tooltip: '全学期总览',
-            icon: const Icon(Icons.grid_view),
-            onPressed: _result == null ? null : _openSemester,
-          ),
-          IconButton(
-            tooltip: '导出图片',
-            icon: const Icon(Icons.ios_share),
-            onPressed: _result == null ? null : _openShareImage,
-          ),
-        ],
       ),
       body: _buildBody(),
     );
@@ -496,8 +605,18 @@ class _TimetablePageState extends State<TimetablePage> {
   }
 
   /// 显示的是缓存内容时顶上挂的一条：点一下立刻重试
+  ///
+  /// 两种情况长得不一样：
+  ///  - 还在忙（_staleReason == null）：说清楚在忙什么，并且给个转圈 ——
+  ///    之前这里是个静止的 Icons.sync，配上不动的文字，看着就是死机。
+  ///  - 已经失败：静态图标 + 原因 + 缓存年龄，整条可点重试。
   Widget _staleBanner() {
     final scheme = Theme.of(context).colorScheme;
+    final busy = _staleReason == null;
+    final text = busy
+        ? (_loggingIn ? '登录已过期，正在自动重新登录…' : '正在更新课表…')
+        : '$_staleReason，${_cacheHint()} · 点此重试';
+
     return Material(
       color: scheme.surfaceContainerHighest,
       child: InkWell(
@@ -506,16 +625,19 @@ class _TimetablePageState extends State<TimetablePage> {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           child: Row(
             children: [
-              Icon(_staleReason == null ? Icons.sync : Icons.cloud_off,
-                  size: 16, color: Colors.grey),
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: busy
+                    ? CircularProgressIndicator(
+                        strokeWidth: 2, color: scheme.primary)
+                    : const Icon(Icons.cloud_off,
+                        size: 16, color: Colors.grey),
+              ),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  _staleReason == null
-                      ? '正在更新课表…'
-                      : '$_staleReason，${_cacheHint()} · 点此重试',
-                  style: const TextStyle(fontSize: 12, color: Colors.grey),
-                ),
+                child: Text(text,
+                    style: const TextStyle(fontSize: 12, color: Colors.grey)),
               ),
             ],
           ),

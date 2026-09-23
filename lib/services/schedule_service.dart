@@ -15,6 +15,8 @@ class ScheduleService {
           followRedirects: false,
           // 教务系统未登录会重定向到 SSO；这里把 3xx 也当正常返回，便于识别登录失效
           validateStatus: (s) => s != null && s < 500,
+          connectTimeout: AppConfig.connectTimeout,
+          receiveTimeout: AppConfig.receiveTimeout,
           headers: {
             'Cookie': cookie,
             'User-Agent':

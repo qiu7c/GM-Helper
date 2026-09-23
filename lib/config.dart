@@ -132,4 +132,15 @@ class AppConfig {
     '周六',
     '周日',
   ];
+
+  /// 直连教务 / 统一认证的几个 Dio 共用的一组超时。
+  ///
+  /// **必须显式设**：dio 的这两个默认是 null，等于不限时，交给系统 TCP 栈 ——
+  /// 网络黑洞时连接能挂一两分钟，连上了但响应中途停住则永远不返回。界面上的
+  /// 表现就是顶部一直写着「正在更新课表…」动也不动，看着像卡死。
+  /// 设了之后最坏情况也只是超时抛错，横幅会转成「请求超时…点此重试」。
+  static const Duration connectTimeout = Duration(seconds: 8);
+
+  /// 教务那几张页面（xsMain / 课表）体积不小，给宽裕一点，但一定要有上限
+  static const Duration receiveTimeout = Duration(seconds: 20);
 }

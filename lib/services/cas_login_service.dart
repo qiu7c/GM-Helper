@@ -36,6 +36,8 @@ class CasLoginService {
     _dio = Dio(BaseOptions(
       followRedirects: false, // 手动跟跳，保证每跳都过 CookieJar
       validateStatus: _acceptAll,
+      connectTimeout: AppConfig.connectTimeout,
+      receiveTimeout: AppConfig.receiveTimeout,
       headers: {
         'User-Agent':
             'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 '

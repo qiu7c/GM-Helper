@@ -166,11 +166,22 @@ class _LoginPageState extends State<LoginPage> {
     Navigator.of(context).pop<LoginResult>(LoginResult.failed(message));
   }
 
-  /// 兜底：整条自动登录链路超时还没走完，就把网页露出来，别让用户对着转圈干等
+  /// 兜底：整条自动登录链路超时还没走完，就把网页露出来，别让用户对着转圈干等。
+  ///
+  /// 分阶段给话。正常登录 5~10 秒就该走完，还停在统一身份认证页说明八成是卡住了
+  /// （网络慢、密码改过、要验证码），这时候得请用户接手；而已经过了门户、正在往
+  /// 教务跳的那一段用户插不上手，只提示"比较慢"，别写"请手动登录"误导人。
+  ///
+  /// 15 秒是有意的：静默登录期间屏幕上一点变化都没有（那一层是 opacity:0 的），
+  /// 等太久只会让人以为 App 死了。
   Future<void> _watchOverall() async {
-    await Future<void>.delayed(const Duration(seconds: 25));
+    await Future<void>.delayed(const Duration(seconds: 15));
     if (!mounted || _popped || _phase == _Phase.done || _webVisible) return;
-    _reveal(hint: '自动登录超时，请在此页面手动登录');
+    _reveal(
+      hint: _phase == _Phase.login
+          ? '自动登录超时，请在此页面手动登录'
+          : '正在进入教务系统，这一步比较慢，请稍候',
+    );
   }
 
   Future<void> _onUrl(String url, InAppWebViewController c) async {
