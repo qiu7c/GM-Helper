@@ -1,7 +1,7 @@
 name: gdgm_schedule
 description: GMPluse - 广东工贸职业技术学院校园助手 (Android/iOS)
 publish_to: 'none'
-version: 2.0.4+10
+version: 2.1.0+11
 
 environment:
   sdk: '>=3.5.0 <4.0.0'
@@ -23,6 +23,14 @@ dependencies:
   encrypt: ^5.0.3
   cookie_jar: ^4.0.8
   dio_cookie_manager: ^3.1.1
+  # 读 App 自身的版本号：关于页和更新检查都用它，省得跟 pubspec 两处手工同步
+  package_info_plus: ^8.0.0
+  # 把下载链接丢给系统浏览器（APK/IPA 不在 App 里下）
+  url_launcher: ^6.3.0
+  # 课表导出成图片后调系统分享。
+  # 锁 10.x：11.x 把静态的 Share.shareXFiles 换成了 SharePlus.instance.share(...)，
+  # 是破坏性改动，等以后有空再迁。
+  share_plus: ^10.0.0
 
 dev_dependencies:
   flutter_lints: ^4.0.0
@@ -33,6 +41,8 @@ flutter:
   uses-material-design: true
   assets:
     - assets/icon/app_logo.png
+    # 更新日志打进包里，「关于 → 更新日志」直接读它
+    - CHANGELOG.md
 
 # App 图标配置：蓝底白校徽，深浅模式统一不变黑
 flutter_launcher_icons:

@@ -138,6 +138,10 @@ jobs:
           path: build/app/outputs/flutter-apk/app-release.apk
 
   # ---------- 打包 iOS（未签名，仅用于自行侧载/自签）----------
+  #
+  # 提醒：macOS runner 按 **10 倍**扣分钟数。私有仓 Free 套餐每月 2000 分钟，
+  # 折合只有约 200 分钟 macOS 时间，而一次 iOS 构建就要十几分钟 —— 推得勤的话
+  # 留意 Settings → Billing → Actions 的用量，额度烧完后当月所有构建都不跑。
   build-ios:
     runs-on: macos-latest
     steps:
@@ -194,12 +198,20 @@ jobs:
           name: gdgm-schedule-ipa-unsigned
           path: build/ios/iphoneos/app-unsigned.ipa
 
-  # ---------- 发布 Release（APK + 未签名 IPA）----------
+  # ---------- 发布到「公开分发仓」（APK + 未签名 IPA）----------
+  #
+  # 源码仓是私有的，但产物必须能直接下载（手机浏览器下载 APK、TrollStore 侧载
+  # IPA），所以 Release 建在**另一个公开仓**里。跨仓写用的是 RELEASE_REPO_TOKEN
+  # 这个细粒度 PAT（只授权了那一个仓的 Contents: write），不是本仓的 GITHUB_TOKEN。
   release:
     needs: [ build-android, build-ios ]
+    # iOS 那步挂了也要把 Android 的包发出去，所以不能只靠 needs 的默认语义
+    if: always() && needs.build-android.result == 'success'
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # 允许创建 Release / 打 tag
+      contents: read   # 产物推到别的仓库，走 PAT；本仓只读就够
+    env:
+      REPO: qiu7c/GMPluse-Release
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -207,10 +219,64 @@ jobs:
       - name: 读取版本号
         id: ver
         run: |
-          # 从 pubspec.yaml 取 version（形如 1.0.1+2，取 + 前面部分）
-          V=$(grep '^version:' pubspec.yaml | sed 's/version:[[:space:]]*//' | cut -d'+' -f1)
+          # pubspec.yaml 的 version 形如 2.1.0+11：+ 前是版本名，+ 后是 versionCode
+          RAW=$(grep '^version:' pubspec.yaml | sed 's/version:[[:space:]]*//')
+          V=${RAW%%+*}
+          B=${RAW#*+}
+          if [ "$B" = "$RAW" ]; then B=0; fi   # 没有 +N 时兜底
           echo "version=$V" >> "$GITHUB_OUTPUT"
-          echo "解析到版本：$V"
+          echo "code=$B" >> "$GITHUB_OUTPUT"
+          echo "解析到版本：$V+$B"
+
+      # 从 CHANGELOG.md 抽出本版本那一段，同时生成三份东西：
+      #   notes.md   —— 原始文本（人看的）
+      #   notes.json —— 同一个字符串的 JSON 字面量，塞进 latest.json 的 notes 字段
+      #   body.md    —— 分发仓 Release 的正文
+      # 用 python 写 JSON 是为了转义：更新日志是多行文本，手工 echo 拼引号迟早出事。
+      - name: 取出本版本的更新日志
+        env:
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          python3 - "$V" <<'PY'
+          import json, pathlib, re, sys
+
+          ver = sys.argv[1]
+
+          # 先把换行统一成 \n。CHANGELOG.md 是在 Windows 上手工维护的，
+          # 编辑器一旦写成 CRLF，下面那个 `[ \t]*$` 就会因为行尾多出的 \r 匹配不上，
+          # 结果更新日志**静默变空**（只有一条 warning），很难查。
+          text = (pathlib.Path('CHANGELOG.md').read_text(encoding='utf-8')
+                  .replace('\r\n', '\n').replace('\r', '\n'))
+
+          # 取 `## <ver>` 到下一个 `## `（或文件结尾）之间的内容。
+          # 结尾用 \Z 而不是 $：$ 会立刻匹配到标题那一行的行尾，导致抓出空串。
+          m = re.search(r'^##[ \t]+' + re.escape(ver) + r'[ \t]*$(.*?)(?=^##[ \t]|\Z)',
+                        text, re.M | re.S)
+          notes = m.group(1).strip() if m else ''
+          if not notes:
+              print('::warning::CHANGELOG.md 里没有 %s 这一节，Release 说明将是空的' % ver)
+              notes = '（本版本没有写更新说明）'
+
+          pathlib.Path('notes.md').write_text(notes, encoding='utf-8')
+          pathlib.Path('notes.json').write_text(json.dumps(notes, ensure_ascii=False),
+                                                encoding='utf-8')
+
+          body = '\n'.join([
+              '### 更新内容',
+              '',
+              notes,
+              '',
+              '### 下载',
+              '',
+              '- **Android**：下载 `GMPluse-v%s.apk` 直接安装' % ver,
+              '- **iOS**：下载 `GMPluse-v%s-unsigned.ipa`，用 TrollStore / AltStore / '
+              'Sideloadly 侧载自签' % ver,
+              '',
+              '> iOS 为未签名包，需自行侧载。',
+          ])
+          pathlib.Path('body.md').write_text(body, encoding='utf-8')
+          print(body)
+          PY
 
       - name: 下载 APK 产物
         uses: actions/download-artifact@v4
@@ -219,33 +285,65 @@ jobs:
           path: dist
 
       - name: 下载 IPA 产物
+        if: needs.build-ios.result == 'success'
         uses: actions/download-artifact@v4
         with:
           name: gdgm-schedule-ipa-unsigned
           path: dist
 
-      - name: 重命名产物（带版本号）
-        run: |
-          cd dist
-          ls -al
-          mv app-release.apk "GMPluse-v${{ steps.ver.outputs.version }}.apk"
-          mv app-unsigned.ipa "GMPluse-v${{ steps.ver.outputs.version }}-unsigned.ipa"
-          ls -al
-
-      - name: 创建 / 更新 Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.ver.outputs.version }}
-          name: GMPluse v${{ steps.ver.outputs.version }}
-          body: |
-            GMPluse v${{ steps.ver.outputs.version }}
-
-            - Android：下载 `GMPluse-v${{ steps.ver.outputs.version }}.apk` 直接安装
-            - iOS：下载 `GMPluse-v${{ steps.ver.outputs.version }}-unsigned.ipa`，用 TrollStore / AltStore / Sideloadly 侧载自签
-
-            > iOS 为未签名包，需自行侧载。
-          files: |
-            dist/GMPluse-v${{ steps.ver.outputs.version }}.apk
-            dist/GMPluse-v${{ steps.ver.outputs.version }}-unsigned.ipa
+      - name: 重命名产物 + 生成更新清单
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          V: ${{ steps.ver.outputs.version }}
+          B: ${{ steps.ver.outputs.code }}
+        run: |
+          mv dist/app-release.apk "dist/GMPluse-v$V.apk"
+          # IPA 有可能没有（iOS 那步挂了）。这里不用 `[ -f x ] && mv`：set -e 下
+          # 测试失败会返回非零，整个步骤会被判失败。
+          if [ -f dist/app-unsigned.ipa ]; then
+            mv dist/app-unsigned.ipa "dist/GMPluse-v$V-unsigned.ipa"
+          fi
+
+          # App 读的就是这个文件（地址固定为 releases/latest/download/latest.json）。
+          # notes 直接用上一步生成好的 JSON 字面量，别再手工拼引号。
+          BASE="https://github.com/$REPO/releases/download/v$V"
+          {
+            printf '{\n'
+            printf '  "version": "%s",\n' "$V"
+            printf '  "versionCode": %s,\n' "$B"
+            printf '  "notes": %s,\n' "$(cat notes.json)"
+            printf '  "apk": "%s/GMPluse-v%s.apk",\n' "$BASE" "$V"
+            if [ -f "dist/GMPluse-v$V-unsigned.ipa" ]; then
+              printf '  "ipa": "%s/GMPluse-v%s-unsigned.ipa"\n' "$BASE" "$V"
+            else
+              printf '  "ipa": ""\n'
+            fi
+            printf '}\n'
+          } > dist/latest.json
+          echo "--- latest.json ---"
+          cat dist/latest.json
+          ls -al dist
+
+      - name: 推到公开分发仓
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_REPO_TOKEN }}
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          # body.md 是「取出本版本的更新日志」那步按 CHANGELOG.md 生成的，
+          # 里面就是本版本的更新内容 + 两个下载入口。
+
+          # 已存在就复用（同一版本重复推时不报错），顺手把说明覆盖成最新的 ——
+          # 更新日志改了个错字重跑一次，Release 页面也跟着更新
+          if gh release view "v$V" --repo "$REPO" >/dev/null 2>&1; then
+            gh release edit "v$V" --repo "$REPO" \
+              --title "GMPluse v$V" \
+              --notes-file body.md
+          else
+            gh release create "v$V" --repo "$REPO" \
+              --title "GMPluse v$V" \
+              --notes-file body.md
+          fi
+
+          # nullglob：通配符没匹配到就展开成空，否则会把字面量当文件名传给 gh
+          shopt -s nullglob
+          FILES=(dist/*.apk dist/*.ipa dist/latest.json)
+          gh release upload "v$V" --repo "$REPO" --clobber "${FILES[@]}"

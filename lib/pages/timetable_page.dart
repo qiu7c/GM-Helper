@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../config.dart';
 import '../models/course.dart';
+import '../models/period_time.dart';
 import '../services/auth_store.dart';
 import '../services/auto_login.dart';
 import '../services/course_notes.dart';
@@ -9,6 +12,10 @@ import '../services/schedule_cache.dart';
 import '../services/schedule_prefs.dart';
 import '../services/schedule_service.dart';
 import '../widgets/course_colors.dart';
+import '../widgets/now_status_bar.dart';
+import '../widgets/timetable_grid.dart';
+import 'semester_page.dart';
+import 'share_image_page.dart';
 
 class TimetablePage extends StatefulWidget {
   const TimetablePage({super.key});
@@ -36,13 +43,27 @@ class _TimetablePageState extends State<TimetablePage> {
   /// 当前显示的是不是缓存内容（还没刷新成功）
   bool _fromCache = false;
 
+  /// 这份缓存是什么时候抓的（只在 _fromCache 时有意义）。
+  /// 缓存可能是好几天前的，横幅上得让用户知道，不然会以为是最新的。
+  DateTime? _cacheTime;
+
   /// 有缓存但联网刷新失败了，这里是原因
   String? _staleReason;
+
+  /// 顶部那条「正在上什么课」跟着它走。
+  ///
+  /// 单开一个 notifier 而不是 setState：格子很重，为了翻一分钟重排整张课表不值当。
+  final ValueNotifier<DateTime> _clock = ValueNotifier(DateTime.now());
+  Timer? _ticker;
 
   @override
   void initState() {
     super.initState();
     _week = SchedulePrefs.instance.currentWeek();
+    // 20 秒一次，够让「还有 N 分钟」跟着走，又不会太费
+    _ticker = Timer.periodic(const Duration(seconds: 20), (_) {
+      _clock.value = DateTime.now();
+    });
     // 「我的」页改学期/校区后，自动重载
     SchedulePrefs.instance.revision.addListener(_onPrefsChanged);
     // 在「我的」页登录/退出后，课表也跟着刷新
@@ -54,6 +75,8 @@ class _TimetablePageState extends State<TimetablePage> {
 
   @override
   void dispose() {
+    _ticker?.cancel();
+    _clock.dispose();
     SchedulePrefs.instance.revision.removeListener(_onPrefsChanged);
     AuthStore.authRevision.removeListener(_onAuthChanged);
     CourseNotes.instance.revision.removeListener(_onNotesChanged);
@@ -115,6 +138,9 @@ class _TimetablePageState extends State<TimetablePage> {
           await ScheduleCache.read(user: user, term: wantTerm, campus: wantCampus);
       if (seq != _loadSeq) return;
       if (cached != null) {
+        final at = await ScheduleCache.cachedAt(
+            user: user, term: wantTerm, campus: wantCampus);
+        if (seq != _loadSeq) return;
         setState(() {
           _result = cached;
           _term = cached.selectedTerm ?? wantTerm;
@@ -122,6 +148,7 @@ class _TimetablePageState extends State<TimetablePage> {
           _loading = false;
           _error = null;
           _fromCache = true;
+          _cacheTime = at;
           _staleReason = null; // 刷新还在路上，先显示"正在更新"
         });
       }
@@ -162,6 +189,7 @@ class _TimetablePageState extends State<TimetablePage> {
         _loading = false;
         _error = null;
         _fromCache = false;
+        _cacheTime = null; // 拿到新的了，之前那份缓存的时间戳作废
         _staleReason = null;
       });
       await ScheduleCache.write(
@@ -214,6 +242,23 @@ class _TimetablePageState extends State<TimetablePage> {
     }
     if (s.contains('imeout')) return '请求超时';
     return '刷新失败';
+  }
+
+  /// 横幅上那句"显示的是哪份缓存"。取不到时间戳（早期版本写的缓存）就笼统说。
+  String _cacheHint() {
+    final at = _cacheTime;
+    if (at == null) return '显示的是上次缓存的内容';
+    return '显示的是缓存（${_ageText(at)}）';
+  }
+
+  /// 把时间差说成人话：「刚刚」「3 小时前」「2 天前」「3 个月前」
+  String _ageText(DateTime at) {
+    final d = DateTime.now().difference(at);
+    if (d.inMinutes < 2) return '刚刚';
+    if (d.inHours < 1) return '${d.inMinutes} 分钟前';
+    if (d.inDays < 1) return '${d.inHours} 小时前';
+    if (d.inDays < 30) return '${d.inDays} 天前';
+    return '${d.inDays ~/ 30} 个月前';
   }
 
   Future<void> _goLogin() async {
@@ -317,6 +362,36 @@ class _TimetablePageState extends State<TimetablePage> {
     }
   }
 
+  /// 全学期总览。挑中的那一周由那个页面 pop 回来。
+  Future<void> _openSemester() async {
+    final w = await Navigator.of(context).push<int>(
+      MaterialPageRoute(
+        builder: (_) => SemesterPage(
+          // 注意传的是整学期的课，不是当前这周的 —— 总览自己按周过滤
+          courses: _result?.courses ?? const [],
+          totalWeeks: _totalWeeks,
+          currentWeek: SchedulePrefs.instance.currentWeek(),
+        ),
+      ),
+    );
+    if (!mounted || w == null || w == _week) return;
+    setState(() => _week = w);
+    _load(keepSelection: true);
+  }
+
+  /// 导出图片。分享那一步在目标页里做，这里只管把当前这周的课带过去。
+  Future<void> _openShareImage() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ShareImagePage(
+          courses: _visibleCourses,
+          week: _week,
+          campusId: _campus,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -355,6 +430,16 @@ class _TimetablePageState extends State<TimetablePage> {
             icon: const Icon(Icons.event),
             onPressed: _pickDate,
           ),
+          IconButton(
+            tooltip: '全学期总览',
+            icon: const Icon(Icons.grid_view),
+            onPressed: _result == null ? null : _openSemester,
+          ),
+          IconButton(
+            tooltip: '导出图片',
+            icon: const Icon(Icons.ios_share),
+            onPressed: _result == null ? null : _openShareImage,
+          ),
         ],
       ),
       body: _buildBody(),
@@ -384,10 +469,20 @@ class _TimetablePageState extends State<TimetablePage> {
     return Column(
       children: [
         if (_fromCache) _staleBanner(),
+        // 「现在在上什么」只在看本周时才有意义，翻到别的周就撤掉
+        if (_week == SchedulePrefs.instance.currentWeek())
+          ValueListenableBuilder<DateTime>(
+            valueListenable: _clock,
+            builder: (_, now, __) => NowStatusBar(
+              courses: _visibleCourses,
+              now: now,
+              campusId: _campus,
+            ),
+          ),
         Expanded(
           child: RefreshIndicator(
             onRefresh: () => _load(keepSelection: true),
-            child: _TimetableGrid(
+            child: TimetableGrid(
               courses: _visibleCourses,
               week: _week,
               onTap: _showCourseDetail,
@@ -418,7 +513,7 @@ class _TimetablePageState extends State<TimetablePage> {
                 child: Text(
                   _staleReason == null
                       ? '正在更新课表…'
-                      : '$_staleReason，显示的是上次缓存的内容 · 点此重试',
+                      : '$_staleReason，${_cacheHint()} · 点此重试',
                   style: const TextStyle(fontSize: 12, color: Colors.grey),
                 ),
               ),
@@ -577,232 +672,6 @@ class _TimetablePageState extends State<TimetablePage> {
           Text('$label：', style: const TextStyle(color: Colors.grey)),
           Expanded(child: Text(value)),
         ],
-      ),
-    );
-  }
-}
-
-/// 课表网格：左侧节次列 + 顶部星期(带日期)行 + 课程卡片
-class _TimetableGrid extends StatelessWidget {
-  final List<Course> courses;
-  final int week;
-  final void Function(Course) onTap;
-  final void Function(Course) onLongPress;
-  final String? campusId;
-
-  const _TimetableGrid({
-    required this.courses,
-    required this.week,
-    required this.onTap,
-    required this.onLongPress,
-    this.campusId,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    List<Course> at(int period, int day) => courses
-        .where((c) => c.period == period && c.day == day)
-        .toList();
-
-    const timeColWidth = 38.0;
-    final today = DateTime.now().weekday;
-    // 本周周一日期
-    final monday = SchedulePrefs.instance.mondayOfWeek(week);
-    final isCurrentWeek = SchedulePrefs.instance.currentWeek() == week;
-
-    return LayoutBuilder(builder: (context, constraints) {
-      final dayWidth = (constraints.maxWidth - timeColWidth) / 7;
-      return SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        child: Column(
-          children: [
-            // 顶部星期 + 日期
-            Row(
-              children: [
-                SizedBox(width: timeColWidth, height: 52),
-                for (var d = 1; d <= 7; d++)
-                  _dayHeader(context, d, monday, isCurrentWeek && d == today,
-                      dayWidth),
-              ],
-            ),
-            for (var p = 1; p <= AppConfig.periodCount; p++)
-              IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    SizedBox(
-                      width: timeColWidth,
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text('$p',
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold, fontSize: 13)),
-                          const SizedBox(height: 2),
-                          Text(
-                            AppConfig.periodTime(campusId, p),
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                                fontSize: 8.5,
-                                color: Colors.grey,
-                                height: 1.2),
-                          ),
-                        ],
-                      ),
-                    ),
-                    for (var d = 1; d <= 7; d++)
-                      SizedBox(
-                        width: dayWidth,
-                        child: _cell(context, at(p, d)),
-                      ),
-                  ],
-                ),
-              ),
-            const SizedBox(height: 16),
-          ],
-        ),
-      );
-    });
-  }
-
-  Widget _dayHeader(BuildContext context, int day, DateTime monday,
-      bool isToday, double width) {
-    final date = monday.add(Duration(days: day - 1));
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: width,
-      height: 52,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: isToday ? scheme.primaryContainer : null,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(
-            AppConfig.weekDayNames[day - 1],
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: isToday ? FontWeight.bold : FontWeight.w500,
-              color: isToday ? scheme.onPrimaryContainer : null,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            '${date.month}/${date.day}',
-            style: TextStyle(
-              fontSize: 10,
-              color: isToday ? scheme.onPrimaryContainer : Colors.grey,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _cell(BuildContext context, List<Course> list) {
-    if (list.isEmpty) {
-      return Container(
-        margin: const EdgeInsets.all(2),
-        constraints: const BoxConstraints(minHeight: 92),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.all(2),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (final c in list)
-            Expanded(child: _courseBox(c, multi: list.length > 1)),
-        ],
-      ),
-    );
-  }
-
-  Widget _courseBox(Course c, {required bool multi}) {
-    final color = CourseColors.of(c.name);
-    final note = CourseNotes.instance.noteOf(c.name);
-    return Padding(
-      padding: EdgeInsets.only(bottom: multi ? 3 : 0),
-      child: InkWell(
-        onTap: () => onTap(c),
-        onLongPress: () => onLongPress(c),
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          constraints: BoxConstraints(minHeight: multi ? 44 : 92),
-          padding: const EdgeInsets.all(5),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.9),
-            borderRadius: BorderRadius.circular(8),
-            boxShadow: [
-              BoxShadow(
-                color: color.withOpacity(0.25),
-                blurRadius: 3,
-                offset: const Offset(0, 1),
-              ),
-            ],
-          ),
-          child: Stack(
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    c.name,
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        height: 1.2),
-                    maxLines: multi ? 2 : 3,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 3),
-                  if (c.room.isNotEmpty)
-                    Text(
-                      '@${c.room}',
-                      style: const TextStyle(color: Colors.white, fontSize: 10),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  if (c.teacher.isNotEmpty && !multi)
-                    Text(
-                      c.teacher,
-                      style: const TextStyle(color: Colors.white70, fontSize: 10),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  if (note != null && !multi) ...[
-                    const SizedBox(height: 3),
-                    Row(
-                      children: [
-                        const Icon(Icons.push_pin, size: 9, color: Colors.white),
-                        const SizedBox(width: 2),
-                        Expanded(
-                          child: Text(
-                            note,
-                            style: const TextStyle(
-                                color: Colors.white, fontSize: 9, height: 1.1),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
-              ),
-              // 多课叠放时空间小，仅用右上角图钉标记有备注
-              if (note != null && multi)
-                const Positioned(
-                  top: 0,
-                  right: 0,
-                  child: Icon(Icons.push_pin, size: 10, color: Colors.white),
-                ),
-            ],
-          ),
-        ),
       ),
     );
   }

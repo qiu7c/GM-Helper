@@ -32,6 +32,17 @@ class AppConfig {
   /// 学期理论课表接口
   static const String scheduleUrl = '$jwHost/jsxsd/xskb/xskb_list.do';
 
+  /// 更新清单地址，指向**公开的分发仓**（源码仓是私有的，App 永远不碰它）。
+  ///
+  /// 写死在 `releases/latest/download/` 下：这个路径永远解析到「最新一次正式
+  /// release」，所以不用随版本号改。清单内容形如：
+  /// `{"version":"2.1.0","versionCode":11,"apk":"...","ipa":"..."}`
+  ///
+  /// 注意 release 不能勾成 prerelease / draft，否则 `latest` 不会指向它。
+  static const String updateManifestUrl =
+      'https://github.com/qiu7c/GMPluse-Release'
+      '/releases/latest/download/latest.json';
+
   /// 判定"门户已登录"的 URL 特征（CAS 登录成功后落在 eportal 首页）
   static const List<String> portalSuccessMarkers = [
     'eportal.gdgm.cn/new/index',

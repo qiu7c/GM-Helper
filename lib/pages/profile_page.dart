@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/course.dart';
+import '../services/app_info.dart';
 import '../services/auth_store.dart';
 import '../services/auto_login.dart';
 import '../services/profile_service.dart';
 import '../services/schedule_prefs.dart';
 import '../services/schedule_service.dart';
+import '../services/update_service.dart';
 import 'about_page.dart';
 
 /// "我的"页：检查登录状态，展示详细学籍信息，选择学期/校区，退出登录。
@@ -27,12 +30,17 @@ class _ProfilePageState extends State<ProfilePage> {
   String? _term;
   String? _campus;
 
+  /// 查到的可用新版本。null 表示"已是最新 / 还没查 / 查失败"，三种都不打扰用户。
+  UpdateInfo? _update;
+  bool _checkingUpdate = false;
+
   @override
   void initState() {
     super.initState();
     // 在别的页面登录/退出后，切回本页时自动重新检查
     AuthStore.authRevision.addListener(_onAuthChanged);
     _check();
+    _checkUpdate();
   }
 
   @override
@@ -211,6 +219,7 @@ class _ProfilePageState extends State<ProfilePage> {
             if (_status == _Status.loggedIn) ..._loggedInTiles(),
             if (_status == _Status.loggedOut) _loginTile(),
             const Divider(),
+            _updateTile(),
             ListTile(
               leading: const Icon(Icons.info_outline),
               title: const Text('关于'),
@@ -223,6 +232,107 @@ class _ProfilePageState extends State<ProfilePage> {
         ),
       ),
     );
+  }
+
+  /// 「检查更新」一条。
+  ///
+  /// 启动时已经静默查过一次：查到新版就在这条上挂个红点提示，查不到就只显示
+  /// 当前版本号。用户主动点时才有弹窗反馈。
+  Widget _updateTile() {
+    final scheme = Theme.of(context).colorScheme;
+    final up = _update;
+    return ListTile(
+      leading: Icon(
+        up == null ? Icons.system_update_alt : Icons.new_releases,
+        color: up == null ? null : scheme.primary,
+      ),
+      title: const Text('检查更新'),
+      subtitle: up == null ? null : Text('发现新版本 ${up.version}'),
+      trailing: _checkingUpdate
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : Text(
+              AppInfo.version,
+              style: TextStyle(
+                  color: up == null ? Colors.grey : scheme.primary),
+            ),
+      onTap: _checkingUpdate
+          ? null
+          : (up == null ? _manualCheckUpdate : () => _offerUpdate(up)),
+    );
+  }
+
+  /// 启动时静默查一次。任何失败都当作"没有更新"，不弹任何东西。
+  Future<void> _checkUpdate() async {
+    final info = await UpdateService.check();
+    if (!mounted) return;
+    setState(() => _update = info);
+  }
+
+  /// 用户主动点的那次：这次要有反馈，不能像启动时那样静默
+  Future<void> _manualCheckUpdate() async {
+    setState(() => _checkingUpdate = true);
+    final info = await UpdateService.check();
+    if (!mounted) return;
+    setState(() {
+      _checkingUpdate = false;
+      _update = info;
+    });
+    if (info == null) {
+      _toast('已是最新版本（${AppInfo.version}）');
+      return;
+    }
+    await _offerUpdate(info);
+  }
+
+  /// 提示有新版本，并给出下载入口。
+  ///
+  /// 不在 App 里下载安装：Android 要申请「安装未知应用」权限，iOS 的未签名
+  /// IPA 又必须走 TrollStore。两条路都丢给系统浏览器最省事，也最不容易出错。
+  Future<void> _offerUpdate(UpdateInfo info) async {
+    final url = UpdateService.downloadUrlFor(info);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('发现新版本 ${info.version}'),
+        content: Text(info.notes.isEmpty
+            ? '当前 ${AppInfo.version}，可以更新到 ${info.version}。'
+            : info.notes),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('以后再说'),
+          ),
+          if (url != null)
+            FilledButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                _openDownload(url);
+              },
+              child: const Text('去下载'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openDownload(String url) async {
+    try {
+      // 不用 canLaunchUrl：它在 Android 11+ 要在 manifest 里声明 <queries>，
+      // 直接 launch、失败就 catch，能省掉一处平台配置。
+      final ok = await launchUrl(Uri.parse(url),
+          mode: LaunchMode.externalApplication);
+      if (!ok && mounted) _toast('打不开浏览器，请手动访问：$url');
+    } catch (_) {
+      if (mounted) _toast('打不开浏览器，请手动访问：$url');
+    }
+  }
+
+  void _toast(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   Widget _header() {

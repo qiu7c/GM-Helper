@@ -23,6 +23,13 @@ class ScheduleCache {
   /// 最多留几份，避免换账号/学期/校区后无限堆积
   static const _maxEntries = 6;
 
+  /// 超过这个时长就当作没有缓存。
+  ///
+  /// 只影响「很久没联上网」这一种情况：正常情况下每次打开 App 都会刷新并重新
+  /// 盖时间戳。放 30 天是因为再久就跨了半个学期，那份课表大概率已经不是现在
+  /// 这张了 —— 宁可显示空态让用户联网，也别拿旧数据误导。
+  static const _maxAge = Duration(days: 30);
+
   static String _keyOf(String? user, String? term, String? campus) =>
       '${user ?? ''}|${term ?? ''}|${campus ?? ''}';
 
@@ -39,7 +46,7 @@ class ScheduleCache {
     }
   }
 
-  /// 读缓存。没有、坏了、或者是个空课表都返回 null。
+  /// 读缓存。没有、坏了、过期了、或者是个空课表都返回 null。
   ///
   /// 空课表特意当作"没有缓存"：宁可转圈，也别拿一份空表把用户的课表抹掉。
   static Future<ScheduleResult?> read({
@@ -51,6 +58,7 @@ class ScheduleCache {
     final entry = all[_keyOf(user, term, campus)];
     if (entry is! Map) return null;
     final e = entry.cast<String, dynamic>();
+    if (_expired(e)) return null;
     try {
       final courses = (e['courses'] as List? ?? const [])
           .whereType<Map>()
@@ -72,7 +80,7 @@ class ScheduleCache {
     }
   }
 
-  /// 这份缓存是什么时候抓的
+  /// 这份缓存是什么时候抓的。课表页拿它显示「N 天前的课表」。
   static Future<DateTime?> cachedAt({
     String? user,
     String? term,
@@ -81,8 +89,19 @@ class ScheduleCache {
     final all = await _readAll();
     final entry = all[_keyOf(user, term, campus)];
     if (entry is! Map) return null;
-    return DateTime.tryParse((entry['at'] ?? '').toString());
+    return _timeOf(entry.cast<String, dynamic>());
   }
+
+  /// 时间戳缺失（早期版本写进去的、或数据被手工改过）一律不算过期 ——
+  /// 宁可多显示一份旧数据，也别因为读不到 'at' 就把缓存整个作废。
+  static bool _expired(Map<String, dynamic> e) {
+    final at = _timeOf(e);
+    if (at == null) return false;
+    return DateTime.now().difference(at) > _maxAge;
+  }
+
+  static DateTime? _timeOf(Map<String, dynamic> e) =>
+      DateTime.tryParse((e['at'] ?? '').toString());
 
   static Future<void> write({
     String? user,

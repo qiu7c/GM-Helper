@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../services/app_info.dart';
+import 'changelog_page.dart';
+
 /// 关于页：版本、联系方式、使用声明
 class AboutPage extends StatelessWidget {
   const AboutPage({super.key});
 
-  static const String version = '2.0.4';
+  // 版本号不在这里写死：唯一来源是 pubspec.yaml，由 AppInfo 在启动时读出来。
   static const String author = 'cc';
   static const String email = 'xcc575838@gmail.com';
   static const String qq = '921569084';
@@ -25,9 +28,9 @@ class AboutPage extends StatelessWidget {
                     TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
           ),
           const SizedBox(height: 4),
-          const Center(
-            child: Text('版本 $version',
-                style: TextStyle(color: Colors.grey)),
+          Center(
+            child: Text('版本 ${AppInfo.version}',
+                style: const TextStyle(color: Colors.grey)),
           ),
           const SizedBox(height: 32),
           const ListTile(
@@ -37,10 +40,19 @@ class AboutPage extends StatelessWidget {
           ),
           _copyTile(context, Icons.email_outlined, '邮箱', email),
           _copyTile(context, Icons.chat_bubble_outline, 'QQ', qq),
-          const ListTile(
-            leading: Icon(Icons.tag),
-            title: Text('版本号'),
-            trailing: Text(version),
+          ListTile(
+            leading: const Icon(Icons.tag),
+            title: const Text('版本号'),
+            // 带构建号：反馈问题时让对方报这个，比只报 2.1.0 准
+            trailing: Text(AppInfo.full),
+          ),
+          ListTile(
+            leading: const Icon(Icons.article_outlined),
+            title: const Text('更新日志'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const ChangelogPage()),
+            ),
           ),
           const ListTile(
             leading: Icon(Icons.build_outlined),
