@@ -323,13 +323,62 @@ jobs:
           cat dist/latest.json
           ls -al dist
 
+      # 分发仓刚建好、一个 commit 都没有时，GitHub 拒绝在上面建 release，
+      # 回的是 422 "Repository is empty." —— 报错信息里既没有 "empty repo" 的
+      # 提示也看不出该干嘛，所以这里先补一个 README 把默认分支顶出来。
+      - name: 确认分发仓不是空仓
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_REPO_TOKEN }}
+        run: |
+          NEED_SEED=0
+          if ERR=$(gh api "repos/$REPO/commits?per_page=1" 2>&1); then
+            echo "分发仓已有提交，跳过"
+          else
+            case "$ERR" in
+              *mpty*)
+                echo "分发仓一个提交都没有，先塞个 README 把默认分支建出来"
+                NEED_SEED=1
+                ;;
+              *)
+                # 权限不对、仓名写错之类，别伪装成"空仓"往下走
+                echo "::error::查不到分发仓的提交记录：$ERR"
+                exit 1
+                ;;
+            esac
+          fi
+
+          if [ "$NEED_SEED" = 0 ]; then
+            exit 0
+          fi
+
+          cat > README.md <<'MD'
+          # GMPluse 分发仓
+
+          这里只放编译好的安装包，源码在私有仓，不在这里。
+
+          | 平台 | 文件 | 怎么装 |
+          | --- | --- | --- |
+          | Android | `GMPluse-vX.Y.Z.apk` | 下载后直接安装 |
+          | iOS | `GMPluse-vX.Y.Z-unsigned.ipa` | TrollStore / AltStore / Sideloadly 侧载自签 |
+
+          > iOS 是未签名包，需要自行侧载。App 内「我的 → 检查更新」读的是本仓
+          > `releases/latest/download/latest.json`，所以 release 不能勾 draft / prerelease。
+          MD
+
+          if ! gh api "repos/$REPO/contents/README.md" -X PUT \
+               -f message="初始化分发仓" \
+               -f content="$(base64 -w0 README.md)" > /dev/null; then
+            echo "::error::自动初始化失败。请手动打开 https://github.com/$REPO 点「Add a README file」建一个文件，再重跑本 job。"
+            exit 1
+          fi
+          echo "已初始化"
+
       - name: 推到公开分发仓
         env:
           GH_TOKEN: ${{ secrets.RELEASE_REPO_TOKEN }}
           V: ${{ steps.ver.outputs.version }}
         run: |
-          # body.md 是「取出本版本的更新日志」那步按 CHANGELOG.md 生成的，
-          # 里面就是本版本的更新内容 + 两个下载入口。
+          echo "Release 说明用 body.md（上一步按 CHANGELOG.md 生成的）"
 
           # 已存在就复用（同一版本重复推时不报错），顺手把说明覆盖成最新的 ——
           # 更新日志改了个错字重跑一次，Release 页面也跟着更新
