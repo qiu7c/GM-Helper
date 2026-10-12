@@ -148,10 +148,18 @@ class _ProfilePageState extends State<ProfilePage> {
   //
   // 设置页用的是同一组数字，两页切换时的节奏才一致。
 
-  static const Duration _enterTotal = Duration(milliseconds: 460);
-  static const Duration _enterFade = Duration(milliseconds: 240);
-  static const Duration _enterStep = Duration(milliseconds: 35);
-  static const int _enterMaxStep = 6;
+  // ⚠ **没有淡入，只有位移。** 和设置页同一组数字。
+  //
+  // 原来这里（和设置页）是 opacity 0→1 配位移，总时长 460ms。实机 iOS 上用户报
+  // 「点进新页面会先看到上一个页面一闪而过」和「动画延迟卡顿」，根因是淡入：
+  // 页面背景透明（`GlassBackdrop` 在 Navigator 后面），转场那几百毫秒里新页面几乎
+  // 整页全透明 → 看到的是还在退场的上一个页面；而每行一次 `Opacity` 就是一次
+  // `saveLayer`，一屏七八次，iOS 上很贵。
+  //
+  // 位移留着（`Transform` 便宜得多），第一帧就有内容。
+  static const Duration _enterTotal = Duration(milliseconds: 260);
+  static const Duration _enterStep = Duration(milliseconds: 18);
+  static const int _enterMaxStep = 4;
 
   /// 给列表每一项套上入场动画。纯占位的间距和分割线不算进度，跳过它们。
   List<Widget> _entered(List<Widget> children) {
@@ -172,7 +180,6 @@ class _ProfilePageState extends State<ProfilePage> {
     final step = _enterStep.inMilliseconds *
         (i < _enterMaxStep ? i : _enterMaxStep);
     final start = step / total;
-    final end = (step + _enterFade.inMilliseconds) / total;
 
     // 用一个共同时长 + 各自的 Interval 来错开，而不是给每行不同的 duration ——
     // 那只会让后面的行播得慢，不是"依次开始"。
@@ -182,13 +189,10 @@ class _ProfilePageState extends State<ProfilePage> {
     return TweenAnimationBuilder<double>(
       tween: Tween<double>(begin: 0, end: 1),
       duration: _enterTotal,
-      curve: Interval(start, end, curve: Curves.easeOut),
-      builder: (_, t, inner) => Opacity(
-        opacity: t,
-        child: Transform.translate(
-          offset: Offset(0, 8 * (1 - t)),
-          child: inner,
-        ),
+      curve: Interval(start, 1, curve: Curves.easeOut),
+      builder: (_, t, inner) => Transform.translate(
+        offset: Offset(0, 8 * (1 - t)),
+        child: inner,
       ),
       child: child,
     );

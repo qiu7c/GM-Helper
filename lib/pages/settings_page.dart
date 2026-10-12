@@ -271,9 +271,32 @@ class _SettingsPageState extends State<SettingsPage> {
       final dir = await getApplicationDocumentsDirectory();
       final dot = picked.path.lastIndexOf('.');
       final ext = dot >= 0 ? picked.path.substring(dot) : '.jpg';
-      final dest = File('${dir.path}/bg_image$ext');
+      // ⚠ **文件名每次都必须不一样。**
+      //
+      // 原来固定叫 `bg_image$ext`，于是第二次选图写到的是**同一个路径**，两个坑
+      // 同时踩中：
+      //   1. `SchedulePrefs.setBgImage` 开头是 `if (path == 当前值) return` —— 路径
+      //      没变，notifier 压根不通知，界面不重建；
+      //   2. 就算重建了，`Image.file` 是拿**路径**当图片缓存键的，同一个路径永远
+      //      取回第一次解码的那张。
+      // 结果就是"从相册选一张之后再也换不成别的"（用户实测反馈）。加上时间戳，
+      // 两个问题一起消失。
+      final dest =
+          File('${dir.path}/bg_image_${DateTime.now().millisecondsSinceEpoch}$ext');
+      final old = SchedulePrefs.instance.bgImage;
       await File(picked.path).copy(dest.path);
       await SchedulePrefs.instance.setBgImage(dest.path);
+      // 把上一张（我们自己拷进私有目录的那份）清掉：文件删掉，顺手从图片缓存里
+      // 踢出去，免得内存里还压着一张 2000px 的位图。删不掉也不影响换图。
+      if (old != null && old != dest.path) {
+        final oldFile = File(old);
+        await FileImage(oldFile).evict();
+        try {
+          if (oldFile.path.startsWith(dir.path) && await oldFile.exists()) {
+            await oldFile.delete();
+          }
+        } catch (_) {/* 删不掉就算了 */}
+      }
     } catch (e) {
       // 用户点"取消"不会走到这里；这里是权限被拒、文件读不到之类的真错误。
       // 原始原因对用户没意义，只进日志；界面上给一句他能照做的：换一张。
@@ -499,13 +522,22 @@ class _SettingsPageState extends State<SettingsPage> {
 
   // ---------- 入场 ----------
   //
-  // 和「我的」页同一套参数：每行往上挪 8px + 淡入，按序号依次错开，总时长压在
-  // 460ms。两页用同一组数字，切换时的节奏才是一致的。
-
-  static const Duration _enterTotal = Duration(milliseconds: 460);
-  static const Duration _enterFade = Duration(milliseconds: 240);
-  static const Duration _enterStep = Duration(milliseconds: 35);
-  static const int _enterMaxStep = 6;
+  // 入场动画 = 每行往上挪 8px，按序号依次错开。
+  //
+  // ⚠ **这里故意没有淡入（Opacity）。** 原来有：opacity 0→1 配位移，总时长 460ms。
+  // 实机 iOS 上用户报了两件事 ——「点进新页面会先看到上一个页面一闪而过」和
+  // 「动画延迟卡顿」，两件都出在这个淡入上：
+  //
+  //  * 页面背景是**透明**的（`GlassBackdrop` 画在整个 Navigator 后面，见 main.dart），
+  //    所以新页面在推入转场那几百毫秒里几乎**整页全透明** —— 眼睛看到的就是那个还在
+  //    退场的上一个页面，然后内容才"加载"出来。这不是转场慢，是新页面当时真的没画东西。
+  //  * 每一行的 `Opacity` 都是一次 `saveLayer`，一屏七八行就是七八次。iOS 上这个很贵。
+  //
+  // 位移留着（`Transform` 比 `saveLayer` 便宜得多），翻页照样有层次，
+  // 但**第一帧就是有内容的** —— 这才是"不闪上一个页面"的关键。
+  static const Duration _enterTotal = Duration(milliseconds: 260);
+  static const Duration _enterStep = Duration(milliseconds: 18);
+  static const int _enterMaxStep = 4;
 
   List<Widget> _entered(List<Widget> children) {
     final out = <Widget>[];
@@ -525,17 +557,13 @@ class _SettingsPageState extends State<SettingsPage> {
     final step =
         _enterStep.inMilliseconds * (i < _enterMaxStep ? i : _enterMaxStep);
     final start = step / total;
-    final end = (step + _enterFade.inMilliseconds) / total;
     return TweenAnimationBuilder<double>(
       tween: Tween<double>(begin: 0, end: 1),
       duration: _enterTotal,
-      curve: Interval(start, end, curve: Curves.easeOut),
-      builder: (_, t, inner) => Opacity(
-        opacity: t,
-        child: Transform.translate(
-          offset: Offset(0, 8 * (1 - t)),
-          child: inner,
-        ),
+      curve: Interval(start, 1, curve: Curves.easeOut),
+      builder: (_, t, inner) => Transform.translate(
+        offset: Offset(0, 8 * (1 - t)),
+        child: inner,
       ),
       child: child,
     );

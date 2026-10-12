@@ -38,8 +38,22 @@ class ScheduleCache {
   // 也就是说，这份数据只在"用户没退出登录"这个前提下长期保留 —— 而那个前提正是
   // 我们要的语义。
 
-  static String _keyOf(String? user, String? term, String? campus) =>
-      '${user ?? ''}|${term ?? ''}|${campus ?? ''}';
+  /// key = 用户 | 学期 | 校区 | **周次**
+  ///
+  /// ⚠ **周次必须进 key，这是修 bug 加上的。**
+  ///
+  /// 教务是**按周返回**的：`ScheduleService.fetch(week:)` 会把周次当成 `zc` 参数发给
+  /// 教务，同一学期的第 7 周和第 8 周拿到的是**两套不同的课程**（实测：第 7 周 8 门、
+  /// 第 8 周 1 门）。
+  ///
+  /// 原来 key 里没有周次，于是会发生这样一串：
+  ///   1. 翻到第 8 周 → 联网刷新 → 缓存被**第 8 周**的数据覆盖；
+  ///   2. 重进 App（回到第 7 周）→ 读到的却是第 8 周那份缓存；
+  ///   3. 课表页拿"屏幕上这份"（第 8 周）当基线，去比刚拉回来的第 7 周课表 →
+  ///      **必然**报出一堆"新增 N 门、取消 M 门"。
+  /// 用户看到的不是"学校调课了"，而是"切周弹、重进还弹，一直反复弹窗"。
+  static String _keyOf(String? user, String? term, String? campus, String? week) =>
+      '${user ?? ''}|${term ?? ''}|${campus ?? ''}|${week ?? ''}';
 
   static Future<Map<String, dynamic>> _readAll() async {
     final sp = await SharedPreferences.getInstance();
@@ -62,9 +76,10 @@ class ScheduleCache {
     String? user,
     String? term,
     String? campus,
+    required String? week,
   }) async {
     final all = await _readAll();
-    final entry = all[_keyOf(user, term, campus)];
+    final entry = all[_keyOf(user, term, campus, week)];
     if (entry is! Map) return null;
     final e = entry.cast<String, dynamic>();
     try {
@@ -93,9 +108,10 @@ class ScheduleCache {
     String? user,
     String? term,
     String? campus,
+    required String? week,
   }) async {
     final all = await _readAll();
-    final entry = all[_keyOf(user, term, campus)];
+    final entry = all[_keyOf(user, term, campus, week)];
     if (entry is! Map) return null;
     return _timeOf(entry.cast<String, dynamic>());
   }
@@ -109,12 +125,13 @@ class ScheduleCache {
     String? user,
     String? term,
     String? campus,
+    required String? week,
     required ScheduleResult result,
   }) async {
     // 空课表不写：否则一次异常的响应就把好数据覆盖掉了
     if (result.courses.isEmpty) return;
     final all = await _readAll();
-    final k = _keyOf(user, term, campus);
+    final k = _keyOf(user, term, campus, week);
     all.remove(k); // 先删再插，让它排到最新
     all[k] = {
       'at': DateTime.now().toIso8601String(),

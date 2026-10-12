@@ -40,6 +40,14 @@ class _TimetablePageState extends State<TimetablePage> {
   String? _term;
   String? _campus;
   int _week = 1;
+
+  /// 屏幕上那份 `_result` 是**哪一周**的课表。
+  ///
+  /// 教务按周返回（第 7 周和第 8 周是两套课程，见 `ScheduleCache._keyOf`），所以
+  /// "屏幕上这份"必须带着周次才说得清。两处用到它：
+  ///  * 切周时决定要不要重新读缓存（缓存 key 里也带周次了）；
+  ///  * 比对课表变化时要求两边同周（`ScheduleDiff.comparable`）。
+  int? _resultWeek;
   bool _calendarLoaded = false; // 本会话是否已同步过教务日历
 
   /// 登录页是否已经打开，避免重复弹（登录状态变化可能同时触发多条路径）
@@ -178,17 +186,25 @@ class _TimetablePageState extends State<TimetablePage> {
     if (seq != _loadSeq) return;
 
     // 1) 铺缓存。已经显示了同一份内容就不重复读了。
-    final changed = wantTerm != _term || wantCampus != _campus;
+    //
+    // ⚠ **周次变了也要重读。** 缓存本身是按周存的（key 里带周次）：翻到第 8 周时
+    // 该读的是第 8 周那份，而不是继续用第 7 周的顶在那儿。读不到就保持现状，联网
+    // 刷新随后会补上。
+    final wantWeek = _week.toString();
+    final changed = wantTerm != _term ||
+        wantCampus != _campus ||
+        (_result != null && _resultWeek != _week);
     if (_result == null || changed) {
-      final cached =
-          await ScheduleCache.read(user: user, term: wantTerm, campus: wantCampus);
+      final cached = await ScheduleCache.read(
+          user: user, term: wantTerm, campus: wantCampus, week: wantWeek);
       if (seq != _loadSeq) return;
       if (cached != null) {
         final at = await ScheduleCache.cachedAt(
-            user: user, term: wantTerm, campus: wantCampus);
+            user: user, term: wantTerm, campus: wantCampus, week: wantWeek);
         if (seq != _loadSeq) return;
         setState(() {
           _result = cached;
+          _resultWeek = _week;
           _term = cached.selectedTerm ?? wantTerm;
           _campus = cached.selectedCampus ?? wantCampus;
           _loading = false;
@@ -249,9 +265,12 @@ class _TimetablePageState extends State<TimetablePage> {
         }
       }
 
+      // 这一轮请求的是哪一周：先取快照。后面写缓存、记基线都用它 ——
+      // `_week` 在等待期间可能被用户翻走，用快照才不会把结果记到别的周头上。
+      final fetchWeek = _week;
       final result = await service.fetch(
         term: wantTerm,
-        week: _week.toString(),
+        week: fetchWeek.toString(),
         campus: wantCampus,
       );
       if (!mounted || seq != _loadSeq) return;
@@ -260,6 +279,7 @@ class _TimetablePageState extends State<TimetablePage> {
       final before = _result;
       setState(() {
         _result = result;
+        _resultWeek = fetchWeek;
         _term = result.selectedTerm ?? _term;
         _campus = result.selectedCampus ?? _campus;
         _loading = false;
@@ -268,15 +288,21 @@ class _TimetablePageState extends State<TimetablePage> {
         _cacheTime = null; // 拿到新的了，之前那份缓存的时间戳作废
         _staleReason = null;
       });
-      await ScheduleCache.write(
-          user: user, term: _term, campus: _campus, result: result);
+      await ScheduleCache.write(user: user, term: _term, campus: _campus,
+          week: fetchWeek.toString(), result: result);
       if (_term != null) await AuthStore.saveLastTerm(_term!);
       if (_campus != null) await AuthStore.saveLastCampus(_campus!);
       SchedulePrefs.instance.sync(term: _term, campus: _campus);
-      // 教务中途调课/加课了就说一声。**只和上一份比**，所以同一份课表不会反复弹：
-      // 一次成功刷新之后缓存被覆盖，下次比对的基线就是刚拿到的这一份。
-      if (before != null) {
-        final diff = ScheduleDiff.compare(before.courses, result.courses);
+      // 教务中途调课/加课了就说一声。
+      //
+      // ⚠ **只有同一周的两份才比。** 教务是按周返回的（周次是发给它的 `zc` 参数），
+      // 所以翻一周再刷新时，"屏幕上那份"属于**刚翻走的那一周** —— 直接拿来比，必然
+      // 报出一堆"新增 N 门、取消 M 门"，可那不是学校调课，只是换了一周。用户看到的
+      // 就是"切周弹、重进还弹，一直反复弹窗"。
+      //
+      // 判据在 `ScheduleDiff.comparable`：两边周次都有、且相等才比，拿不准就不比。
+      if (ScheduleDiff.comparable(before, result)) {
+        final diff = ScheduleDiff.compare(before!.courses, result.courses);
         if (!diff.isEmpty && mounted) _announceDiff(diff);
       }
     } catch (e) {
@@ -635,9 +661,20 @@ class _TimetablePageState extends State<TimetablePage> {
   Widget _scaffold(BuildContext context, DateTime now) {
     final curWeek = SchedulePrefs.instance.currentWeek();
     return Scaffold(
-      // 内容从玻璃顶栏**底下**穿过去。不然视口从顶栏下沿开始，玻璃背后是一块
-      // 纯色，模糊等于白做 —— 玻璃得背后有东西才看得出是玻璃。
-      extendBodyBehindAppBar: true,
+      // **课表不许穿到顶栏底下去。**
+      //
+      // 这里原来给 true，理由是"玻璃背后要有东西可糊，不然模糊白做"。但这一页的
+      // 顶栏是 `frosted: false` —— 它压根不画玻璃（见下面 appBar 那段），所以这条
+      // 理由在这一页根本不成立，换来的只有 bug：内容从顶栏**底下**穿过去，而顶栏
+      // 是透明的，往上滑到一定程度，课表格子就和"上课状态"那一段叠在一起了
+      // （用户实测反馈：上滑会和上课状态糊成一坨，要有一条分界）。
+      //
+      // ⚠ **内边距解决不了这件事，别想着靠 padding 兜。**
+      // `MediaQuery.padding.top` 是加在 SingleChildScrollView **内部**的，滚动时
+      // 它跟着内容一起往上走 —— 内容一滑，那点留白就没了，格子照样顶上去。
+      // 只有让**视口本身**从顶栏下沿开始（也就是这里给 false），滚动才真的被裁在
+      // 那条线上。这是"边界"，不是"间距"。
+      extendBodyBehindAppBar: false,
       appBar: glassAppBar(
         context: context,
         // **顶栏不画玻璃。**
@@ -831,27 +868,29 @@ class _TimetablePageState extends State<TimetablePage> {
   }
 
   Widget _buildBody() {
-    // 整块包一个 Builder：三个分支都要用 Scaffold **换过**的内边距（顶栏高度 +
-    // 悬浮底栏高度），而 `_buildBody()` 的 context 在 Scaffold 之上，读到的是
-    // 状态栏高度。Builder 在 Scaffold 之下，拿到的才是换好的那份。
+    // 整块包一个 Builder：三个分支都要用 Scaffold **换过**的内边距（悬浮底栏
+    // 换过的那份 bottom），而 `_buildBody()` 的 context 在 Scaffold 之上，读到的
+    // 是原始那份。Builder 在 Scaffold 之下，拿到的才是换好的。
+    //
+    // ⚠ 顶部**不要**再用 media.padding.top：视口已经从顶栏下沿开始了
+    //（见 `extendBodyBehindAppBar: false` 那段），让开一个顶部内边距就是白空一截。
     return Builder(builder: (ctx) {
       final media = MediaQuery.of(ctx);
+      // 只留 4 的呼吸位，和加载完之后的课表对齐（三态用同一份，切换时不跳）
+      final pad = media.padding.copyWith(top: 4);
 
       if (_loading) {
-        // 骨架屏而不是屏幕正中一个转圈。这里传**整份** media.padding 而不是只让
-        // 开顶部：骨架屏外面的（顶栏 + 横幅 + 状态卡）加起来能到 200 出头，只留
-        // 顶部的话底下会多出半行灰块压在玻璃底栏上，而且行数是按可用高算的，
-        // 高估一行就多画一行。跟加载完的静止状态对齐。
+        // 骨架屏而不是屏幕正中一个转圈。bottom 必须留着：行数是按可用高算的，
+        // 高估一行就会多画一行灰块压在玻璃底栏上。
         return Padding(
-          padding: media.padding,
+          padding: pad,
           child: const TimetableSkeleton(),
         );
       }
       if (_error != null) {
-        // 顶栏（玻璃 + 横幅 + 状态卡）现在最厚能到 200 出头，不自己让开的话
-        // 错误文案会藏在玻璃底下。Center 在让开之后的区域里居中。
+        // Center 在让开之后的区域里居中
         return Padding(
-          padding: media.padding,
+          padding: pad,
           child: Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -875,8 +914,9 @@ class _TimetablePageState extends State<TimetablePage> {
       // 滚动视图上面还钉着东西，视口就从那块下面开始，课表永远穿不到玻璃底下。
       return RefreshIndicator(
         onRefresh: () => _load(keepSelection: true),
-        // 不偏这一下的话，下拉的转圈会出现在顶栏底下被挡住
-        edgeOffset: media.padding.top,
+        // 视口就是从顶栏下沿开始的，转圈出现在视口顶部即可（0），不用再往下推
+        // 一个 media.padding.top —— 那会让它悬在课表中间。
+        edgeOffset: 0,
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
           // SingleChildScrollView **不会**自己吃 MediaQuery 的内边距
@@ -888,7 +928,12 @@ class _TimetablePageState extends State<TimetablePage> {
           // 现在状态卡**没有底色也没有描边**、高亮块改成了淡红强调色，同色相黏
           // 这件事不存在了，所以间隔收到 4 —— 顶栏、状态、课表要"几乎融为一体"，
           // 留太大就又把它们切开了。
-          padding: media.padding.copyWith(top: media.padding.top + 4),
+          // 视口已经从顶栏下沿开始了（见 extendBodyBehindAppBar 那段），所以这里
+        // **不能再让开一个 media.padding.top** —— 顶栏下面的那 60 来像素本来就是
+        // 顶栏自己占的，再让一次课表会凭空矮一截。
+        //
+        // 只留 4 的呼吸位：顶栏、状态、课表要"几乎融为一体"，留大了又把它们切开。
+        padding: media.padding.copyWith(top: 4),
           child: AnimatedSwitcher(
             // 翻周时淡入 + 轻微上移。key 只跟周次走：同一周内数据刷新（下拉
             // 重载、后台更新）不重播，那时内容是"变"而不是"换了一页"。

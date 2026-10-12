@@ -31,6 +31,24 @@ class ScheduleDiff {
 
   static String _keyOf(Course c) => '${c.name}|${c.day}|${c.period}';
 
+  /// 这两份结果**能不能比**。
+  ///
+  /// ⚠ **必须同一周。** 教务是按周返回的（周次是发给它的 `zc` 参数，见
+  /// `ScheduleService.fetch`）：同一学期的第 7 周和第 8 周是两套完全不同的课程
+  /// （实测 8 门 vs 1 门）。拿它们互比，报出来的"新增/取消"跟"学校调课"毫无关系。
+  ///
+  /// 用户就是这么撞上的：翻一周、或者退出重进（回到当前周），屏幕上那份属于另一周，
+  /// 于是**每次都弹**"课表有变化"，怎么点都还在弹。
+  ///
+  /// 判据用 `selectedWeek` —— 它是从教务返回的那份解析出来的，就是这份数据所属的周。
+  /// **两边都得有、且相等才比；拿不准就不比。** 宁可漏报也不能误报：误报一次，这个
+  /// 提示就再也没人信了（见本文件开头那段）。
+  static bool comparable(ScheduleResult? before, ScheduleResult after) {
+    final pw = before?.selectedWeek;
+    final nw = after.selectedWeek;
+    return pw != null && nw != null && pw == nw;
+  }
+
   /// 拿 [before]（屏幕上那份）和 [after]（刚拉回来的）比对。
   static ScheduleDiff compare(List<Course> before, List<Course> after) {
     final b = <String, Course>{for (final c in before) _keyOf(c): c};

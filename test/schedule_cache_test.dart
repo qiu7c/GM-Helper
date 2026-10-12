@@ -51,18 +51,18 @@ void main() {
 
   group('基本读写', () {
     test('没写过时读出来是 null', () async {
-      expect(await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1'), isNull);
+      expect(await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1', week: '1'), isNull);
     });
 
     test('写进去能原样读出来', () async {
       await ScheduleCache.write(
         user: 'u1',
         term: 't1',
-        campus: 'c1',
+        campus: 'c1', week: '1',
         result: _result(names: ['数据库原理及应用', '高等数学']),
       );
 
-      final got = await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1');
+      final got = await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1', week: '1');
       expect(got, isNotNull);
       expect(got!.courses.map((c) => c.name).toList(),
           ['数据库原理及应用', '高等数学']);
@@ -77,17 +77,17 @@ void main() {
       await ScheduleCache.write(
         user: 'u1',
         term: 't1',
-        campus: 'c1',
+        campus: 'c1', week: '1',
         result: _result(names: ['数据库']),
       );
       await ScheduleCache.write(
         user: 'u1',
         term: 't1',
-        campus: 'c1',
+        campus: 'c1', week: '1',
         result: const ScheduleResult(courses: []), // 空表
       );
 
-      final got = await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1');
+      final got = await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1', week: '1');
       expect(got, isNotNull, reason: '空表不该把已有缓存清掉');
       expect(got!.courses.map((c) => c.name).toList(), ['数据库']);
     });
@@ -96,36 +96,86 @@ void main() {
       await ScheduleCache.write(
         user: 'u1',
         term: 't1',
-        campus: 'c1',
+        campus: 'c1', week: '1',
         result: const ScheduleResult(courses: []),
       );
-      expect(await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1'), isNull);
+      expect(await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1', week: '1'), isNull);
     });
   });
 
-  group('key 按「账号 + 学期 + 校区」隔离', () {
+  group('key 按「账号 + 学期 + 校区 + 周次」隔离', () {
     test('换账号读不到上一个人的课表', () async {
       await ScheduleCache.write(
-        user: 'u1', term: 't1', campus: 'c1', result: _result(names: ['甲']));
-      expect(await ScheduleCache.read(user: 'u2', term: 't1', campus: 'c1'), isNull);
+        user: 'u1', term: 't1', campus: 'c1', week: '1', result: _result(names: ['甲']));
+      expect(await ScheduleCache.read(user: 'u2', term: 't1', campus: 'c1', week: '1'), isNull);
     });
 
     test('换学期互不影响', () async {
       await ScheduleCache.write(
-        user: 'u1', term: 't1', campus: 'c1', result: _result(names: ['甲']));
-      expect(await ScheduleCache.read(user: 'u1', term: 't2', campus: 'c1'), isNull);
+        user: 'u1', term: 't1', campus: 'c1', week: '1', result: _result(names: ['甲']));
+      expect(await ScheduleCache.read(user: 'u1', term: 't2', campus: 'c1', week: '1'), isNull);
     });
 
     test('换校区互不影响', () async {
       await ScheduleCache.write(
-        user: 'u1', term: 't1', campus: 'c1', result: _result(names: ['甲']));
-      expect(await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c2'), isNull);
+        user: 'u1', term: 't1', campus: 'c1', week: '1', result: _result(names: ['甲']));
+      expect(await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c2', week: '1'), isNull);
     });
 
     test('user/term/campus 为 null 也能存取（同一把 key）', () async {
-      await ScheduleCache.write(result: _result(names: ['甲']));
-      final got = await ScheduleCache.read();
+      await ScheduleCache.write(week: null, result: _result(names: ['甲']));
+      final got = await ScheduleCache.read(week: null);
       expect(got?.courses.map((c) => c.name).toList(), ['甲']);
+    });
+
+    // ⚠ 这组是修「课表有变化一直反复弹窗」时加的。
+    //
+    // 教务**按周返回**（周次是发给它的 zc 参数）：同一学期第 7 周 8 门、第 8 周 1 门
+    // （实测）。原来 key 里没有周次，翻到第 8 周会把第 8 周的数据覆盖上去，重进 App
+    // 回到第 7 周时读到的却是第 8 周那份 —— 课表页拿它当基线去比第 7 周的课表，每次
+    // 都报"新增/取消"，用户看到的就是"切周弹、重进还弹"。所以周次必须进 key。
+    test('不同周次互不影响：翻到第 8 周不会把第 7 周那份顶掉', () async {
+      await ScheduleCache.write(
+        user: 'u1', term: 't1', campus: 'c1', week: '7',
+        result: _result(names: ['第7周A', '第7周B', '第7周C']));
+      await ScheduleCache.write(
+        user: 'u1', term: 't1', campus: 'c1', week: '8',
+        result: _result(names: ['第8周只有一门']));
+
+      final w7 = await ScheduleCache.read(
+          user: 'u1', term: 't1', campus: 'c1', week: '7');
+      final w8 = await ScheduleCache.read(
+          user: 'u1', term: 't1', campus: 'c1', week: '8');
+      expect(w7?.courses.map((c) => c.name).toList(),
+          ['第7周A', '第7周B', '第7周C'], reason: '第 7 周那份必须还在');
+      expect(w8?.courses.map((c) => c.name).toList(), ['第8周只有一门']);
+
+      // 这正是误报的来源：两份课程数量都不一样，互比必然报"新增/取消"
+      expect(w7!.courses.length == w8!.courses.length, isFalse);
+    });
+
+    test('某周没缓存就读不到（不会退而给出别周的课表）', () async {
+      await ScheduleCache.write(
+        user: 'u1', term: 't1', campus: 'c1', week: '7',
+        result: _result(names: ['只有第7周']));
+      expect(
+          await ScheduleCache.read(
+              user: 'u1', term: 't1', campus: 'c1', week: '9'),
+          isNull,
+          reason: '第 9 周没写过，就该是空 —— 拿第 7 周的顶上才是 bug');
+    });
+
+    test('cachedAt 也按周次取', () async {
+      await ScheduleCache.write(
+        user: 'u1', term: 't1', campus: 'c1', week: '7', result: _result());
+      expect(
+          await ScheduleCache.cachedAt(
+              user: 'u1', term: 't1', campus: 'c1', week: '7'),
+          isNotNull);
+      expect(
+          await ScheduleCache.cachedAt(
+              user: 'u1', term: 't1', campus: 'c1', week: '8'),
+          isNull);
     });
   });
 
@@ -135,7 +185,7 @@ void main() {
       // 退出登录，课表就不该消失 —— 假期里断网几十天再打开 App，看到的应该还是
       // 上学期那张表，而不是空白。
       await ScheduleCache.write(
-        user: 'u1', term: 't1', campus: 'c1', result: _result());
+        user: 'u1', term: 't1', campus: 'c1', week: '1', result: _result());
       await _mutateEntry((e) => {
             ...e,
             'at': DateTime.now()
@@ -143,27 +193,27 @@ void main() {
                 .toIso8601String(),
           });
 
-      final got = await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1');
+      final got = await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1', week: '1');
       expect(got, isNotNull, reason: '缓存不该因为"旧"而被判死');
       // 时间戳仍读得到，好让顶部那句"显示的是缓存（N 天前）"说实话
-      final at = await ScheduleCache.cachedAt(user: 'u1', term: 't1', campus: 'c1');
+      final at = await ScheduleCache.cachedAt(user: 'u1', term: 't1', campus: 'c1', week: '1');
       expect(at, isNotNull);
       expect(DateTime.now().difference(at!).inDays, greaterThan(300));
     });
 
     test('缺时间戳（早期版本写的）不算过期 —— 宁可旧一点也不作废', () async {
       await ScheduleCache.write(
-        user: 'u1', term: 't1', campus: 'c1', result: _result());
+        user: 'u1', term: 't1', campus: 'c1', week: '1', result: _result());
       await _mutateEntry((e) => {...e}..remove('at'));
 
-      expect(await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1'), isNotNull);
-      expect(await ScheduleCache.cachedAt(user: 'u1', term: 't1', campus: 'c1'), isNull);
+      expect(await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1', week: '1'), isNotNull);
+      expect(await ScheduleCache.cachedAt(user: 'u1', term: 't1', campus: 'c1', week: '1'), isNull);
     });
 
     test('cachedAt 能读回写入时间，且约等于现在', () async {
       await ScheduleCache.write(
-        user: 'u1', term: 't1', campus: 'c1', result: _result());
-      final at = await ScheduleCache.cachedAt(user: 'u1', term: 't1', campus: 'c1');
+        user: 'u1', term: 't1', campus: 'c1', week: '1', result: _result());
+      final at = await ScheduleCache.cachedAt(user: 'u1', term: 't1', campus: 'c1', week: '1');
       expect(at, isNotNull);
       expect(DateTime.now().difference(at!).inMinutes, lessThan(1));
     });
@@ -171,7 +221,7 @@ void main() {
     test('落盘 JSON 被写坏时当没有缓存，而不是抛异常', () async {
       final sp = await SharedPreferences.getInstance();
       await sp.setString(_cacheKey, '{ 这不是合法 JSON');
-      expect(await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1'), isNull);
+      expect(await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1', week: '1'), isNull);
     });
   });
 
@@ -179,13 +229,13 @@ void main() {
     test('最多留 6 份，最旧的被挤掉', () async {
       for (var i = 1; i <= 7; i++) {
         await ScheduleCache.write(
-          user: 'u$i', term: 't1', campus: 'c1', result: _result(names: ['课$i']));
+          user: 'u$i', term: 't1', campus: 'c1', week: '1', result: _result(names: ['课$i']));
       }
 
-      expect(await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1'), isNull,
+      expect(await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1', week: '1'), isNull,
           reason: '第 1 份应被挤掉');
       for (var i = 2; i <= 7; i++) {
-        expect(await ScheduleCache.read(user: 'u$i', term: 't1', campus: 'c1'),
+        expect(await ScheduleCache.read(user: 'u$i', term: 't1', campus: 'c1', week: '1'),
             isNotNull, reason: '第 $i 份应还在');
       }
     });
@@ -193,18 +243,18 @@ void main() {
     test('重复写同一把 key 不会把它算成多份', () async {
       for (var i = 0; i < 8; i++) {
         await ScheduleCache.write(
-          user: 'same', term: 't1', campus: 'c1', result: _result(names: ['课$i']));
+          user: 'same', term: 't1', campus: 'c1', week: '1', result: _result(names: ['课$i']));
       }
-      final got = await ScheduleCache.read(user: 'same', term: 't1', campus: 'c1');
+      final got = await ScheduleCache.read(user: 'same', term: 't1', campus: 'c1', week: '1');
       expect(got, isNotNull);
       expect(got!.courses.first.name, '课7', reason: '后写的应覆盖先写的');
     });
 
     test('clear() 清空全部', () async {
       await ScheduleCache.write(
-        user: 'u1', term: 't1', campus: 'c1', result: _result());
+        user: 'u1', term: 't1', campus: 'c1', week: '1', result: _result());
       await ScheduleCache.clear();
-      expect(await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1'), isNull);
+      expect(await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1', week: '1'), isNull);
     });
   });
 }

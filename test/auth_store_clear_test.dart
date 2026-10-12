@@ -34,12 +34,14 @@ Future<void> _seed() async {
     user: _user,
     term: _term,
     campus: _campus,
+    week: '7',
     result: ScheduleResult(courses: [_course()], selectedTerm: _term),
   );
 }
 
 Future<bool> _hasCache() async =>
-    (await ScheduleCache.read(user: _user, term: _term, campus: _campus)) !=
+    (await ScheduleCache.read(
+            user: _user, term: _term, campus: _campus, week: '7')) !=
     null;
 
 void main() {
