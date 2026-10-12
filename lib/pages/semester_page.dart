@@ -4,6 +4,7 @@ import '../config.dart';
 import '../models/course.dart';
 import '../services/schedule_prefs.dart';
 import '../widgets/course_colors.dart';
+import '../widgets/glass_dialog.dart';
 import '../widgets/timetable_grid.dart';
 
 /// 全学期总览：把整个学期的课平铺出来，一眼看完。
@@ -95,9 +96,8 @@ class _SemesterPageState extends State<SemesterPage> {
 
   /// 格子就那么宽，课程名基本都会被截断，点开看全的
   void _showCourse(Course c) {
-    showModalBottomSheet<void>(
+    showGlassSheet<void>(
       context: context,
-      showDragHandle: true,
       builder: (ctx) {
         final scheme = Theme.of(ctx).colorScheme;
         // 作息原始串是 "08:00\n09:40"，拿来显示前把换行换成连字符
@@ -204,10 +204,12 @@ class _SemesterPageState extends State<SemesterPage> {
       color: isCurrent ? scheme.primaryContainer : scheme.surfaceContainerLow,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: isCurrent ? scheme.primary : scheme.outlineVariant,
-          width: isCurrent ? 1.5 : 1,
-        ),
+        // 非本周的卡片**不再描边** —— 那圈 outlineVariant 色差极小，本质上就是
+        // 一条"分割线"。本周那张的描边保留：它是**选中标记**不是分隔，
+        // 去掉就一眼看不出哪一周是本周了。
+        side: isCurrent
+            ? BorderSide(color: scheme.primary, width: 1.5)
+            : BorderSide.none,
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -306,9 +308,10 @@ class _SemesterPageState extends State<SemesterPage> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.14),
+        // 去掉那圈描边：底色已经把它和背景分开了，再描一圈就是多一条线。
+        // 底色相应从 0.14 提到 0.22 —— 少了描边，原来那个浓度会太淡。
+        color: color.withOpacity(0.22),
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withOpacity(0.55)),
       ),
       child: Text(
         c.room.isEmpty ? c.name : '${c.name} @${c.room}',

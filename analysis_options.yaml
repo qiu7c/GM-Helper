@@ -1,0 +1,15 @@
+# 启用 flutter_lints 规则集。
+#
+# 注意：pubspec.yaml 里一直声明着 `flutter_lints`，但这个文件此前**不存在** ——
+# 而 lint 规则集是靠 `include:` 引进来的，所以那套规则从未生效过：
+# `flutter analyze` 跑的只是分析器的默认检查。
+#
+# 补上之后才是真正的 flutter_lints 检查。首次启用就多出一条实打实的问题：
+# share_image_page.dart 的 use_build_context_synchronously（await 之后又用了
+# `context`）。
+#
+# 已知的遗留问题（不属于本文件职责，故不在这里用 ignore 掩盖）：
+#   info - prefer_const_constructors        （2 处，纯性能提示）
+#   info - use_build_context_synchronously  （1 处，见上）
+# 这些都该改代码解决，而不是在这里关掉规则。
+include: package:flutter_lints/flutter.yaml

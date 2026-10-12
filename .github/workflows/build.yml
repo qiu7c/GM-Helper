@@ -172,6 +172,11 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :NSAppTransportSecurity:NSAllowsArbitraryLoads true" "$PLIST"
           /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName GMPluse" "$PLIST" || \
           /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string GMPluse" "$PLIST"
+          # 「我的 → 背景 → 从相册选择」用 image_picker 取图。iOS 上**缺这条用途
+          # 说明不是弹权限框，是直接崩**。文案会原样印在系统弹窗上。Android 侧不
+          # 需要对应权限：相册走的是系统 SAF/PHPicker，本来就不申请存储权限。
+          /usr/libexec/PlistBuddy -c "Set :NSPhotoLibraryUsageDescription 选择一张照片作为课表背景" "$PLIST" || \
+          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string 选择一张照片作为课表背景" "$PLIST"
           echo "--- Info.plist ---"
           cat "$PLIST"
 

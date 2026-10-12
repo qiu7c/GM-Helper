@@ -183,7 +183,8 @@ class _ShareImagePageState extends State<ShareImagePage> {
             box is RenderBox ? box.localToGlobal(Offset.zero) & box.size : null,
       );
     } catch (e) {
-      _toast('分享失败：$e');
+      debugPrint('分享失败: $e');
+      _toast('分享失败，请稍后重试');
     } finally {
       if (mounted) setState(() => _busy = false);
     }

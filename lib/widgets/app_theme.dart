@@ -14,7 +14,23 @@ import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 class AppTheme {
   AppTheme._();
 
-  static const Color seed = Color(0xFF5B8FF9);
+  /// 种子色：**中性深灰，不再是淡蓝**。
+  ///
+  /// 原来是 0xFF5B8FF9（淡蓝），整套色板都带蓝 —— 顶栏标题、图标、"本周"标记、
+  /// 今天那一列全是蓝的。现在要的是黑白，种子换成中性色；配合下面
+  /// `DynamicSchemeVariant.neutral`，M3 生成的是一套灰阶。
+  ///
+  /// ⚠ 三个分量**必须完全相等**。之前写的是 0xFF2A2A2C，蓝分量比红绿高 2，
+  /// `neutral` 变体依然会把这丝色相留在 primary 上 —— 底栏选中项因此"发蓝"。
+  /// 想让整套色板真的没有色相，种子自己就不能带色相。
+  static const Color seed = Color(0xFF2E2E2E);
+
+  /// 强调色：淡红。
+  ///
+  /// **刻意不放进 `ColorScheme`。** 拿它当 primary 会把整套色板都染红，那就不是
+  /// 黑白了。强调色只在该"点一下"的地方出现：正在上课、今天那一列 ——
+  /// 全 App 上色的地方就这两处，其余一律灰阶。
+  static const Color accent = Color(0xFFFF6B6B);
 
   // ---------- 尺寸 token ----------
   //
@@ -29,18 +45,39 @@ class AppTheme {
   /// 小圆角：列表里的色块、标签
   static const double radiusSm = 10;
 
-  /// 毛玻璃的模糊半径。**别往上调。**
+  /// 毛玻璃的模糊半径。
   ///
-  /// Flutter 3.24 没有 `BackdropFilter.grouped` / `BackdropGroup`（3.27 才有），
-  /// 所以顶栏和底栏各算各的，两个滤镜 = 每帧两次背景抓取。低端安卓上快速甩动
-  /// 有掉帧风险，半径越大越贵。
-  static const double glassBlur = 16;
+  /// ⚠ 这个值**故意开得比原来那条"安全值"大**。原来是 16，注释写着"别往上调"，
+  /// 理由是 Flutter 3.24 没有 `BackdropFilter.grouped` / `BackdropGroup`
+  /// （3.27 才有），顶栏和底栏各算各的 = 每帧两次背景抓取，半径越大越贵。
+  ///
+  /// 但 16 配 0.78 的填充**根本看不出是玻璃**。而且关键在于：玻璃是否看得出来，
+  /// 主要取决于"背景透过来多少"，不是模糊半径 —— 所以真正起作用的是
+  /// [glassFill] 一起降。两个一起调才有玻璃感，只调这个是白花钱。
+  ///
+  /// 代价如实说：底栏那一块面积小（576×154 物理像素）几乎不花钱；顶栏是整宽，
+  /// 低端安卓上快速甩动有掉帧风险。真机上若掉帧，先把这里降回 20。
+  static const double glassBlur = 30;
 
   /// 玻璃底下那层的填充不透明度。
   ///
-  /// 太低（<0.6）内容穿过去时字会糊得读不了；太高（>0.85）就看不出是玻璃了，
-  /// 跟块纯色板没区别，白掏一次模糊的钱。
-  static const double glassFill = 0.78;
+  /// **这个数才是"看不看得出是玻璃"的主开关**，比模糊半径重要得多 —— 它决定背景
+  /// 能透过来多少。
+  ///
+  /// 演变过程：0.78（背景只透两成，模糊开多大都像一块半透明塑料板）→ 0.62（透
+  /// 四成）→ **0.34**。到 0.62 时还是"没有沉浸感"，因为实测顶栏和它背后的背景
+  /// 亮度几乎一样，两块糊在一起了。
+  ///
+  /// 0.34 意味着背景透过来约三分之二，模糊才真的看得出来。代价是字要压在更不
+  /// 确定的底色上：浅色模式背景范围约 0.66~0.92，深色文字压在最暗处仍有约 5:1
+  /// 对比度，够用。再往下调（低于 0.25 左右）字就要开始糊得读不了了。
+  static const double glassFill = 0.34;
+
+  /// 盖在 [accent] 上面的字色。
+  ///
+  /// **不能写白色**：淡红 0xFFFF6B6B 的亮度约 0.33，白字压上去对比度只有
+  /// 2.8:1（不够），深字有 7.6:1。今天那一列的表头是实心强调色 + 这个字色。
+  static const Color onAccent = Color(0xFF1A1A1E);
 
   // ---------- 字号标尺 ----------
   //
@@ -76,12 +113,25 @@ class AppTheme {
 
   static ThemeData _base(Brightness brightness) {
     final isDark = brightness == Brightness.dark;
-    final scheme = ColorScheme.fromSeed(seedColor: seed, brightness: brightness);
+    // neutral 变体：M3 默认的 tonalSpot 会从种子里抽出一点色相掺进各个槽位，
+    // 灰阶就不纯了（表面会带一丝暖调）。neutral 是明确要一套中性色板。
+    final scheme = ColorScheme.fromSeed(
+      seedColor: seed,
+      brightness: brightness,
+      dynamicSchemeVariant: DynamicSchemeVariant.neutral,
+    );
 
     return ThemeData(
       colorScheme: scheme,
       brightness: brightness,
       useMaterial3: true,
+
+      // ⚠ 全 App 的 Scaffold 都透明，因为"底"是 `GlassBackdrop` 画的（见 main.dart）。
+      // 留一个不透明的底色，顶栏/底栏的玻璃背后就是那块纯色，模糊等于白做。
+      //
+      // 写在**这一个**地方就够了：所有页面（含 push 出去的关于页、全学期总览、
+      // 更新日志）自动跟着走，不用逐页去设 backgroundColor。
+      scaffoldBackgroundColor: Colors.transparent,
       // 部分 TextTheme 交给 ThemeData 去 merge 到 Typography 默认上，
       // 没写的槽位会保住框架默认，不会变成 null
       textTheme: _text,
@@ -124,10 +174,12 @@ class AppTheme {
         iconColor: scheme.onSurfaceVariant,
       ),
 
-      dividerTheme: DividerThemeData(
-        color: scheme.outlineVariant,
-        thickness: 0.5,
-      ),
+      // 「完全不想要分割线」：分割线一律画不出来。
+      //
+      // 用"透明"而不是去删页面里每一处 `const Divider()` —— 有几句 Divider 是当
+      // **间距**用的（比如分享图那页的 `Divider(height: 20)`），删掉会让布局错位。
+      // 保留高度槽位、只让它画不出线，是最不伤布局的做法。
+      dividerTheme: const DividerThemeData(color: Colors.transparent),
 
       // 换掉底栏之后，方角的贴底 SnackBar 跟圆角悬浮底栏放一起很出戏
       snackBarTheme: SnackBarThemeData(

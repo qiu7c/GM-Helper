@@ -106,11 +106,9 @@ class _LoginPageState extends State<LoginPage> {
   /// 登录页回显的错误（账号密码错、需要验证码等）
   String? _pageError;
 
-  /// 自动填充时两个输入框的实际长度（如 "账号10/密码8"），用于排错
+  /// 自动填充时两个输入框的实际长度（如 "账号10/密码8"）。
+  /// **只进日志**：这是排错用的读数，不是给用户看的话。
   String _fillState = '';
-
-  /// 登录页里相关输入框的真实结构（自动填充失败时回显，便于定位问题）
-  String _domDump = '';
 
   /// 自动模式下网页是否已经露出来。初始为 false（只显示"正在登录"的框），
   /// 一旦自动登录没成功就置为 true，让用户能在网页上手动接管。
@@ -254,7 +252,8 @@ class _LoginPageState extends State<LoginPage> {
     // 重试到头仍没填进去：把网页露出来让用户自己输，别让他对着加载框干等
     if (_autoTries > 8) {
       if (mounted && _phase == _Phase.login && _pageError == null) {
-        setState(() => _pageError = '自动填写没生效（$_fillState），'
+        debugPrint('自动填写没生效，输入框状态: $_fillState');
+        setState(() => _pageError = '自动填写没生效，'
             '请在页面上手动输入密码后点「登录」。');
         _reveal(hint: '请手动登录');
       }
@@ -449,8 +448,11 @@ class _LoginPageState extends State<LoginPage> {
         res = const <String, dynamic>{};
       }
       final status = (res['status'] ?? '').toString();
+      // 输入框结构只有排错时有用：挂到日志上就够了。原来这里把 `_domDump`
+      // 存下来，在界面上挂一个写着「排错用」的折叠面板 —— 那是开发视角的东西，
+      // 用户不需要看，也不知道该怎么用。要查的时候接一下 logcat 就能拿到。
       final dump = (res['dump'] ?? '').toString();
-      if (dump.isNotEmpty) _domDump = dump;
+      if (dump.isNotEmpty) debugPrint('登录页输入框结构: $dump');
 
       // 页面上挂着验证码：这次不提交，账号密码已经填好，把网页交给用户补验证码。
       // 把 _autoSubmitted 也置上，是为了让 _onUrl 之后走"读页面反馈"而不是
@@ -617,16 +619,44 @@ class _LoginPageState extends State<LoginPage> {
       '${AppConfig.jwHost}/jsxsd/framework/xsMain.jsp',
       '${AppConfig.jwHost}/jsxsd/xskb/xskb_list.do',
     ];
-    final merged = <String, String>{}; // name -> value（后者覆盖前者）
+    // 同名 Cookie 可能在不同 Path 上各存一份，而那是**互不通用的两套会话**：
+    // 正方在 `/` 和 `/jsxsd` 下会各发一个 JSESSIONID，值不同、谁也不认谁。
+    //
+    // 原先这里一律按 name 覆盖（后者赢）。一旦两套同时存在，最终留下哪一张就
+    // 只由底层返回顺序决定 —— 安卓的 android.webkit.CookieManager 和 iOS 的
+    // WKHTTPCookieStore 顺序并不一致，这个选择就变成了不确定的。
+    //
+    // 所以：**底层给得出 path 时，取 path 更具体的那一张**。本 App 所有需要
+    // 登录的请求都在 `/jsxsd/` 下，那正是浏览器会选中并发出去的一张。
+    //
+    // 而 path 给不出来时，**保持原来的"后者覆盖"不变**。这一点很关键：插件在
+    // 安卓上只有 WebView 支持 GET_COOKIE_INFO 才会填 path（MyCookieManager
+    // .getCookies 的 else 分支把 path 直接留成 null），旧版 WebView 走的正是
+    // else。此时没有任何可依据的信息，就不该改变既有行为 —— 否则只是用一个
+    // 未经证实的顺序假设去替换另一个。
+    final best = <String, Cookie>{};
     for (final u in urls) {
       try {
         final list = await cm.getCookies(url: WebUri(u));
         for (final ck in list) {
-          if (ck.name.isNotEmpty) merged[ck.name] = ck.value;
+          if (ck.name.isEmpty) continue;
+          final cur = best[ck.name];
+          if (cur == null) {
+            best[ck.name] = ck;
+            continue;
+          }
+          final curPath = cur.path;
+          final newPath = ck.path;
+          final keepNew = curPath == null
+              // 现在这张没有 path：新那张有就用新的；都没有则沿用"后者覆盖"
+              ? true
+              // 两张都有 path：更具体的（更长）优先
+              : (newPath != null && newPath.length > curPath.length);
+          if (keepNew) best[ck.name] = ck;
         }
       } catch (_) {}
     }
-    return merged.entries.map((e) => '${e.key}=${e.value}').join('; ');
+    return best.values.map((e) => '${e.name}=${e.value}').join('; ');
   }
 
   /// 登录用的 WebView。
@@ -666,7 +696,12 @@ class _LoginPageState extends State<LoginPage> {
       ),
       onWebViewCreated: (c) => _controller = c,
       onProgressChanged: (c, p) {
-        setState(() => _progress = p / 100);
+        // 必须判 mounted。静默登录成功后本页立刻被 pop，而 WebView 的进度回调
+        // 还会再打进来几拍 —— 那时 State 已经 defunct，直接 setState 会抛
+        // "setState() called after dispose(): _LoginPageState#xxx(defunct)"。
+        // 在 MuMu 上实测 3/3 必现（登录越快越明显）。本文件其余 setState 都有
+        // mounted 判断，只有这一处漏了。
+        if (mounted) setState(() => _progress = p / 100);
       },
       onReceivedError: (c, req, err) {
         // 打印错误便于排查（如证书、网络）
@@ -846,29 +881,10 @@ class _LoginPageState extends State<LoginPage> {
                 children: [
                   Text(
                     _autoSubmitted
-                        ? '已自动填入（$_fillState）并提交；若出现验证码，请在页面上输入后点「登录」。'
-                        : '正在自动填入账号密码…（$_fillState）',
+                        ? '已自动填入账号密码并提交；若出现验证码，请在页面上输入后点「登录」。'
+                        : '正在自动填入账号密码…',
                     style: const TextStyle(fontSize: 13),
                   ),
-                  // 把登录页真实的输入框结构露出来，便于排错
-                  if (_domDump.isNotEmpty)
-                    ExpansionTile(
-                      tilePadding: EdgeInsets.zero,
-                      dense: true,
-                      title: Text('查看登录页表单结构（排错用）',
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant)),
-                      children: [
-                        SelectableText(
-                          _domDump,
-                          style: const TextStyle(
-                              fontSize: 11, fontFamily: 'monospace'),
-                        ),
-                      ],
-                    ),
                 ],
               ),
             ),

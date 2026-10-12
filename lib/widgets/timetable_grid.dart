@@ -4,6 +4,7 @@ import '../config.dart';
 import '../models/course.dart';
 import '../services/course_notes.dart';
 import '../services/schedule_prefs.dart';
+import 'app_theme.dart';
 import 'course_colors.dart';
 
 /// 一周的课表网格：左侧大节时间列 + 7 天。
@@ -128,7 +129,15 @@ class TimetableGrid extends StatelessWidget {
       height: 52,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: isToday ? scheme.primaryContainer : null,
+        // 「今天」是**实心**强调色 + 深字。
+        //
+        // 早先是 0.16 的淡红洗 + 红字，实测"看起来很不明显" —— 淡红洗铺在灰阶
+        // 背景上几乎读不出来，红字又只占表头那一小块。要一眼看出今天在哪一列，
+        // 就得给足面积和对比度。
+        //
+        // 字色用 AppTheme.onAccent 而不是白色：淡红亮度约 0.33，白字只有 2.8:1，
+        // 深字有 7.6:1。
+        color: isToday ? AppTheme.accent : null,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -139,7 +148,7 @@ class TimetableGrid extends StatelessWidget {
             style: TextStyle(
               fontSize: 13,
               fontWeight: isToday ? FontWeight.bold : FontWeight.w500,
-              color: isToday ? scheme.onPrimaryContainer : null,
+              color: isToday ? AppTheme.onAccent : null,
             ),
           ),
           // 整学期视图没有"哪一周"可言，日期那一行直接省掉
@@ -151,7 +160,7 @@ class TimetableGrid extends StatelessWidget {
               style: TextStyle(
                 fontSize: 10,
                 color: isToday
-                    ? scheme.onPrimaryContainer
+                    ? AppTheme.onAccent.withOpacity(0.78)
                     : scheme.onSurfaceVariant,
               ),
             ),
@@ -246,8 +255,7 @@ class TimetableGrid extends StatelessWidget {
                         if (c.room.isNotEmpty)
                           Text(
                             '@${c.room}',
-                            style: const TextStyle(
-                                color: Colors.white, fontSize: 9.5),
+                            style: const TextStyle(color: Colors.white, fontSize: 9.5),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -266,8 +274,7 @@ class TimetableGrid extends StatelessWidget {
                         if (c.room.isNotEmpty)
                           Text(
                             '@${c.room}',
-                            style: const TextStyle(
-                                color: Colors.white, fontSize: 10),
+                            style: const TextStyle(color: Colors.white, fontSize: 10),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -283,16 +290,13 @@ class TimetableGrid extends StatelessWidget {
                           const SizedBox(height: 3),
                           Row(
                             children: [
-                              const Icon(Icons.push_pin,
-                                  size: 9, color: Colors.white),
+                              const Icon(Icons.push_pin, size: 9, color: Colors.white),
                               const SizedBox(width: 2),
                               Expanded(
                                 child: Text(
                                   note,
                                   style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 9,
-                                      height: 1.1),
+                                      color: Colors.white, fontSize: 9, height: 1.1),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                 ),

@@ -8,10 +8,12 @@ import '../services/auth_store.dart';
 import '../services/auto_login.dart';
 import '../services/course_notes.dart';
 import '../services/schedule_cache.dart';
+import '../services/schedule_diff.dart';
 import '../services/schedule_prefs.dart';
 import '../services/schedule_service.dart';
 import '../widgets/course_colors.dart';
 import '../widgets/glass.dart';
+import '../widgets/glass_dialog.dart';
 import '../widgets/now_status_bar.dart';
 import '../widgets/skeleton.dart';
 import '../widgets/timetable_grid.dart';
@@ -63,6 +65,13 @@ class _TimetablePageState extends State<TimetablePage> {
   /// 有缓存但联网刷新失败了，这里是原因
   String? _staleReason;
 
+  /// 顶上那条横幅现在该不该"点一下去登录"。
+  ///
+  /// 不能靠比对 `_staleReason` 的文字来判断（那是给用户看的，随时会改），
+  /// 而且这个区分是必须的：缓存还在、Cookie 已丢的时候，`_load()` 按设计会继续
+  /// 留着缓存而不去登录 —— 横幅要是还调 `_load`，就成了一个点了没反应的按钮。
+  bool _needLogin = false;
+
   /// 顶部那条「正在上什么课」跟着它走。
   ///
   /// 单开一个 notifier 而不是 setState：格子很重，为了翻一分钟重排整张课表不值当。
@@ -92,6 +101,8 @@ class _TimetablePageState extends State<TimetablePage> {
     SchedulePrefs.instance.revision.addListener(_onPrefsChanged);
     // 在「我的」页登录/退出后，课表也跟着刷新
     AuthStore.authRevision.addListener(_onAuthChanged);
+    // 用户主动退出登录：连内存里这份课表一起丢掉
+    AuthStore.logoutRevision.addListener(_onLogout);
     // 备注改动后重绘角标
     CourseNotes.instance.revision.addListener(_onNotesChanged);
     _load();
@@ -103,6 +114,7 @@ class _TimetablePageState extends State<TimetablePage> {
     _clock.dispose();
     SchedulePrefs.instance.revision.removeListener(_onPrefsChanged);
     AuthStore.authRevision.removeListener(_onAuthChanged);
+    AuthStore.logoutRevision.removeListener(_onLogout);
     CourseNotes.instance.revision.removeListener(_onNotesChanged);
     super.dispose();
   }
@@ -118,6 +130,22 @@ class _TimetablePageState extends State<TimetablePage> {
   void _onAuthChanged() {
     AuthStore.isLoggedIn().then((ok) {
       if (ok && mounted) _load(keepSelection: true);
+    });
+  }
+
+  void _onLogout() {
+    if (!mounted) return;
+    // 只清磁盘缓存不够：这个页面活在 `IndexedStack` 里，`_result` 还留在内存里，
+    // 切回课表页照样画得出来 —— 退出登录的本意就是"别再让人看到"，那就一起清，
+    // 落回"未登录"那个状态（它本来就带「重试」和「重新登录」两个入口）。
+    setState(() {
+      _result = null;
+      _loading = false;
+      _error = '未登录';
+      _fromCache = false;
+      _cacheTime = null;
+      _staleReason = null;
+      _needLogin = true;
     });
   }
 
@@ -137,12 +165,6 @@ class _TimetablePageState extends State<TimetablePage> {
   Future<void> _load({bool keepSelection = false}) async {
     final seq = ++_loadSeq;
 
-    final cookie = await AuthStore.getCookie();
-    if (seq != _loadSeq) return; // 已有更新的一次加载在跑
-    if (cookie == null || cookie.isEmpty) {
-      _goLogin();
-      return;
-    }
     // 缓存的 key 里带账号：会话过期时缓存不清，带上账号才不会串到别人身上
     final user = await AuthStore.getSavedUsername();
     if (seq != _loadSeq) return;
@@ -186,6 +208,33 @@ class _TimetablePageState extends State<TimetablePage> {
       });
     }
 
+    // ★ Cookie 的检查**放在铺完缓存之后**，这个顺序是有意的。
+    //
+    // 原来这一判在方法最开头：存的 Cookie 一没就立刻弹登录页、连本地课表都不看
+    // 一眼。而安卓上 Cookie 丢并不罕见 —— SharedPreferences 落盘走的是 `apply()`
+    // （异步入盘），登录完立刻划掉 App、被系统清理、换机恢复备份都可能没落上，
+    // iOS 上这种情况少得多。这正是"iOS 近乎完美、安卓老跳登录页"的一大来源。
+    //
+    // 现在的顺序：有课表就先留着课表，顶上挂一条"登录已过期"，由用户决定什么时候登。
+    final cookie = await AuthStore.getCookie();
+    if (seq != _loadSeq) return;
+    if (cookie == null || cookie.isEmpty) {
+      if (_result != null) {
+        setState(() {
+          _loading = false;
+          _error = null;
+          _fromCache = true;
+          _staleReason = '登录已过期';
+          _needLogin = true;
+        });
+        return;
+      }
+      _needLogin = true;
+      _goLogin();
+      return;
+    }
+    _needLogin = false;
+
     // 2) 联网刷新
     try {
       final service = ScheduleService(cookie);
@@ -206,6 +255,9 @@ class _TimetablePageState extends State<TimetablePage> {
         campus: wantCampus,
       );
       if (!mounted || seq != _loadSeq) return;
+      // 屏幕上的那份就是这次的比对基线：铺过缓存时它是缓存，否则是上一次的结果。
+      // 第一次打开 App（_result == null）没有基线，下面不比较、也不提示。
+      final before = _result;
       setState(() {
         _result = result;
         _term = result.selectedTerm ?? _term;
@@ -221,6 +273,12 @@ class _TimetablePageState extends State<TimetablePage> {
       if (_term != null) await AuthStore.saveLastTerm(_term!);
       if (_campus != null) await AuthStore.saveLastCampus(_campus!);
       SchedulePrefs.instance.sync(term: _term, campus: _campus);
+      // 教务中途调课/加课了就说一声。**只和上一份比**，所以同一份课表不会反复弹：
+      // 一次成功刷新之后缓存被覆盖，下次比对的基线就是刚拿到的这一份。
+      if (before != null) {
+        final diff = ScheduleDiff.compare(before.courses, result.courses);
+        if (!diff.isEmpty && mounted) _announceDiff(diff);
+      }
     } catch (e) {
       if (!mounted || seq != _loadSeq) return;
       if (e == ScheduleService.sessionExpired) {
@@ -242,6 +300,23 @@ class _TimetablePageState extends State<TimetablePage> {
           _load(keepSelection: true);
           return;
         }
+        // **屏幕上已经有课表就不弹登录页。**
+        //
+        // 会话过期 ≠ 课表失效：缓存里那张表还是这学期真实的表。原来的行为是不管有
+        // 没有内容都把整页顶掉换成登录页 —— 用户看到的就是"打开 App 课表没了、跳去
+        // 登录"，哪怕他从来没点过退出登录。这条也是"没退出登录课表也会消失"那个反馈
+        // 的来源。
+        //
+        // 现在改成：有内容就留着，顶部挂一条"登录已过期"。那条横幅自己就是入口 ——
+        // 点它会走 _load，届时没有 Cookie，才会真的弹登录页。
+        if (_result != null) {
+          setState(() {
+            _loggingIn = false;
+            _fromCache = true;
+            _staleReason = '登录已过期';
+          });
+          return;
+        }
         _goLogin();
         return;
       }
@@ -252,7 +327,11 @@ class _TimetablePageState extends State<TimetablePage> {
           _fromCache = true;
           _staleReason = _whyOffline(e);
         } else {
-          _error = '加载失败：$e';
+          // 除了缓存就什么都没有，才需要整屏报错。原因用 _whyOffline 压成人话；
+          // 原始异常只进日志 —— 把 "DioException [connection timeout]..." 这种
+          // 直接甩给用户，是开发视角，他看不懂也不知道该怎么办。
+          debugPrint('课表加载失败: $e');
+          _error = '加载失败：${_whyOffline(e)}';
         }
       });
     }
@@ -284,6 +363,48 @@ class _TimetablePageState extends State<TimetablePage> {
     if (d.inDays < 30) return '${d.inDays} 天前';
     return '${d.inDays ~/ 30} 个月前';
   }
+
+  /// 教务中途调课/加课了。
+  ///
+  /// 用弹窗而不是顶部挂一条横幅：这件事**需要被读到**（明天哪节课换了教室），而一条
+  /// 几秒后自己消失、或者能被随手划走的东西等于没说。但也不会天天弹 —— 只有真比对出
+  /// 差异才走到这里，而比对基线每次刷新都会被覆盖成刚拿到的那一份。
+  void _announceDiff(ScheduleDiff diff) {
+    const cap = 4; // 每类最多列几条，其余只报个数
+    showGlassDialog<void>(
+      context: context,
+      title: const Text('课表有变化'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('和上次加载的课表比，${diff.summary()}。'),
+          const SizedBox(height: 10),
+          ...diff.added.take(cap).map((c) => _diffLine('新增', c)),
+          ...diff.removed.take(cap).map((c) => _diffLine('取消', c)),
+          ...diff.changed.take(cap).map((c) => _diffLine('调整', c)),
+          if (diff.total > cap * 3) ...[
+            const SizedBox(height: 8),
+            Text('…还有 ${diff.total - cap * 3} 项，完整内容看课表。'),
+          ],
+        ],
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('知道了'),
+        ),
+      ],
+    );
+  }
+
+  Widget _diffLine(String tag, Course c) => Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Text(
+          '· $tag ${AppConfig.weekDayNames[c.day - 1]} 第 ${c.period} 大节 ${c.name}'
+          '${c.room.isEmpty ? '' : '（${c.room}）'}',
+        ),
+      );
 
   Future<void> _goLogin() async {
     if (!mounted || _loginOpen) return;
@@ -354,9 +475,8 @@ class _TimetablePageState extends State<TimetablePage> {
   }
 
   Future<void> _pickWeek() async {
-    final w = await showModalBottomSheet<int>(
+    final w = await showGlassSheet<int>(
       context: context,
-      showDragHandle: true,
       builder: (_) => GridView.count(
         crossAxisCount: 5,
         padding: const EdgeInsets.all(16),
@@ -520,6 +640,16 @@ class _TimetablePageState extends State<TimetablePage> {
       extendBodyBehindAppBar: true,
       appBar: glassAppBar(
         context: context,
+        // **顶栏不画玻璃。**
+        //
+        // 这是一页的主界面：它上面没有别的内容，一块玻璃板的存在本身就在说
+        // "这是另一层"—— 于是顶栏和课表之间永远有一道能看见的界。去掉之后
+        // 标题、"上课状态"、课表全铺在同一个背景上，顶栏是真的长在页面里。
+        //
+        // 代价如实说：这是一页里唯一没有玻璃的地方，跟底栏的玻璃不是一套语汇。
+        // 但底下没有内容会滚上来（课表总高约 620 逻辑，视口约 934，根本滚不动），
+        // 所以不存在"文字压在课块上看不清"的问题。
+        frosted: false,
         // 刻意不用 leading/actions：那套是按各自宽度去抢地盘、再把 title 挤到
         // 剩下的空间里居中，右边图标一多就偏了。这里让 title 铺满整条，内部
         // 用两个**等宽**的 Expanded 夹住周切换器 —— 于是不管右边收进去几个
@@ -530,18 +660,13 @@ class _TimetablePageState extends State<TimetablePage> {
         titleSpacing: 0,
         title: Row(
           children: [
-            Expanded(
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: _barButton(
-                  icon: Icons.today_outlined,
-                  tooltip: '回到本周',
-                  // 已在本周就置灰：既是"你现在就在本周"的提示，也保证两侧
-                  // 宽度不随状态变化（一变中间就跟着偏）
-                  onPressed: _week == curWeek ? null : () => _goWeek(curWeek),
-                ),
-              ),
-            ),
+            // 左边这一格**故意空着**。原来是「回到本周」按钮，现在搬到不是本周时
+            // 右下角浮出来的小提示（见 `_returnThisWeekChip`）—— 顶栏左上角是
+            // 离拇指最远的地方，而"回到本周"恰恰是翻远了才要点的东西。
+            //
+            // 空着不影响中间周切换器居中：两侧都是 `Expanded(flex: 1)`，宽度由
+            // flex 定，跟里面放不放东西无关。
+            const Expanded(child: SizedBox.shrink()),
             _weekSwitcher(),
             Expanded(
               child: Align(
@@ -586,7 +711,91 @@ class _TimetablePageState extends State<TimetablePage> {
         ),
         bottom: _headerBottom(now),
       ),
-      body: _buildBody(),
+      body: Stack(
+        // ⚠ `expand` 不能省。Stack 默认是 `loose`，非 Positioned 的子节点会拿到
+        // **松约束** —— 下面那个 SingleChildScrollView 就会缩成内容高度，整页
+        // 布局直接塌掉。expand 才让它跟直接挂在 Scaffold.body 上一样拿到紧约束。
+        fit: StackFit.expand,
+        children: [
+          _buildBody(),
+          // 不是本周时，右下角吸一个「回到本周」
+          _returnThisWeekChip(curWeek),
+        ],
+      ),
+    );
+  }
+
+  /// 不是本周时，右下角浮出来的「回到本周」。
+  ///
+  /// 原来它是顶栏左上角的一个图标按钮（已在本周就置灰）。搬下来有两个理由：
+  ///  * 它只在"翻走了"的时候才用得上，而那时候最顺手的落点是拇指附近，不是
+  ///    屏幕左上角；
+  ///  * 顶栏那个位置两边要对称，那个按钮一直在那儿，也等于一直在提示
+  ///    "你现在不能回本周"。
+  ///
+  /// 做成**吸在右下角**的一小块：不跟着课表滚，所以翻多远它都在。
+  Widget _returnThisWeekChip(int curWeek) {
+    final show = _week != curWeek && !_loading && _error == null;
+    // `Positioned.fill` 必须是 Stack 的**直接**子节点，所以这里不能再包一层；
+    // 里面那层 Builder 是为了拿到 **Scaffold 换过**的内边距（`extendBody` 那套
+    // 把 padding.bottom 换成了悬浮底栏的实测高度）。
+    return Positioned.fill(
+      child: Builder(builder: (ctx) {
+        final scheme = Theme.of(ctx).colorScheme;
+        final media = MediaQuery.of(ctx);
+        return Align(
+          alignment: Alignment.bottomRight,
+          child: Padding(
+            padding:
+                EdgeInsets.only(right: 12, bottom: media.padding.bottom + 10),
+            child: AnimatedSlide(
+              // 从右边滑进来。1.4 = 自身宽度的 1.4 倍，足够完全退到屏幕外，
+              // 由 Stack 的 Clip.hardEdge 裁掉
+              offset: show ? Offset.zero : const Offset(1.4, 0),
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutCubic,
+              child: AnimatedOpacity(
+                opacity: show ? 1 : 0,
+                duration: const Duration(milliseconds: 160),
+                // ⚠ 透明度归零之后**仍然参与命中测试**，不挡住的话会在看不见的
+                // 地方拦住课表格子
+                child: IgnorePointer(
+                  ignoring: !show,
+                  child: Material(
+                    color: scheme.primaryContainer,
+                    elevation: 3,
+                    shadowColor: Colors.black26,
+                    borderRadius: BorderRadius.circular(22),
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      onTap: () => _goWeek(curWeek),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 14, 8),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.today_outlined,
+                                size: 16, color: scheme.onPrimaryContainer),
+                            const SizedBox(width: 6),
+                            Text(
+                              '回到本周',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: scheme.onPrimaryContainer,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }),
     );
   }
 
@@ -673,7 +882,13 @@ class _TimetablePageState extends State<TimetablePage> {
           // SingleChildScrollView **不会**自己吃 MediaQuery 的内边距
           // （只有 ListView/BoxScrollView 在 padding 为 null 时才吃），
           // 所以这份要显式接上，否则内容会顶到状态栏和底栏底下
-          padding: media.padding,
+          //
+          // ⚠ 顶部只让开 4。原来让 10，是因为状态卡自己有底色、又和"今天"那一列
+          // 的高亮块同为 primaryContainer，两块同色圆角矩形贴一起会黏住。
+          // 现在状态卡**没有底色也没有描边**、高亮块改成了淡红强调色，同色相黏
+          // 这件事不存在了，所以间隔收到 4 —— 顶栏、状态、课表要"几乎融为一体"，
+          // 留太大就又把它们切开了。
+          padding: media.padding.copyWith(top: media.padding.top + 4),
           child: AnimatedSwitcher(
             // 翻周时淡入 + 轻微上移。key 只跟周次走：同一周内数据刷新（下拉
             // 重载、后台更新）不重播，那时内容是"变"而不是"换了一页"。
@@ -713,6 +928,15 @@ class _TimetablePageState extends State<TimetablePage> {
   ///  - 还在忙（_staleReason == null）：说清楚在忙什么，并且给个转圈 ——
   ///    之前这里是个静止的 Icons.sync，配上不动的文字，看着就是死机。
   ///  - 已经失败：静态图标 + 原因 + 缓存年龄，整条可点重试。
+  /// 顶上那条横幅点一下：该登录就去登录，否则重试刷新。
+  void _onBannerTap() {
+    if (_needLogin) {
+      _goLogin();
+      return;
+    }
+    _load(keepSelection: true);
+  }
+
   Widget _staleBanner() {
     final scheme = Theme.of(context).colorScheme;
     final busy = _staleReason == null;
@@ -724,10 +948,20 @@ class _TimetablePageState extends State<TimetablePage> {
     // 建的时候就知道。内边距和内容都按这个数配的，SizedBox 是保证一致性的那一下。
     return SizedBox(
       height: _bannerHeight,
+      // **不画底色。**
+      //
+      // 这里原来铺的是 `surfaceContainerHighest` —— 一条实心灰带。而这一页的顶栏是
+      // **刻意不画玻璃**的（理由见 `glassAppBar` 那段注释：标题、上课状态、课表要
+      // 铺在同一层背景上，中间不该有一道能看见的界）。横幅再铺一块实心色，就是在
+      // 那层背景上贴了一张卡，跟整页不是一个语汇。
+      //
+      // 去掉底色是安全的：课表总高比视口矮、滚不上来（同上），不存在"文字压在课块
+      // 上看不清"。用 `MaterialType.transparency` 而不是把 Material 去掉 ——
+      // InkWell 的水波纹要靠它。
       child: Material(
-        color: scheme.surfaceContainerHighest,
+        type: MaterialType.transparency,
         child: InkWell(
-          onTap: () => _load(keepSelection: true),
+          onTap: _onBannerTap,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
@@ -765,56 +999,54 @@ class _TimetablePageState extends State<TimetablePage> {
   Future<void> _editNote(Course c) async {
     final ctrl = TextEditingController(
         text: CourseNotes.instance.noteOf(c.name) ?? '');
-    final result = await showDialog<String>(
+    final result = await showGlassDialog<String>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
-        title: Row(
-          children: [
-            Container(
-              width: 6,
-              height: 20,
-              decoration: BoxDecoration(
-                color: CourseColors.of(c.name),
-                borderRadius: BorderRadius.circular(3),
-              ),
+      title: Row(
+        children: [
+          Container(
+            width: 6,
+            height: 20,
+            decoration: BoxDecoration(
+              color: CourseColors.of(c.name),
+              borderRadius: BorderRadius.circular(3),
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(c.name,
-                  style: const TextStyle(fontSize: 16),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis),
-            ),
-          ],
-        ),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          maxLines: 3,
-          maxLength: 100,
-          decoration: const InputDecoration(
-            hintText: '给这门课加个备注，比如「带课本」「机房上课」',
-            border: OutlineInputBorder(),
           ),
-        ),
-        actions: [
-          if (CourseNotes.instance.hasNote(c.name))
-            TextButton(
-              onPressed: () => Navigator.pop(dialogCtx, '__delete__'),
-              child: Text('删除',
-                  style: TextStyle(
-                      color: Theme.of(dialogCtx).colorScheme.error)),
-            ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogCtx),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogCtx, ctrl.text),
-            child: const Text('保存'),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(c.name,
+                style: const TextStyle(fontSize: 16),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis),
           ),
         ],
       ),
+      content: TextField(
+        controller: ctrl,
+        autofocus: true,
+        maxLines: 3,
+        maxLength: 100,
+        decoration: const InputDecoration(
+          hintText: '给这门课加个备注，比如「带课本」「机房上课」',
+          border: OutlineInputBorder(),
+        ),
+      ),
+      actions: [
+        if (CourseNotes.instance.hasNote(c.name))
+          TextButton(
+            onPressed: () => Navigator.pop(context, '__delete__'),
+            child: Text('删除',
+                style:
+                    TextStyle(color: Theme.of(context).colorScheme.error)),
+          ),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, ctrl.text),
+          child: const Text('保存'),
+        ),
+      ],
     );
     ctrl.dispose();
     if (result == null) return; // 取消
@@ -826,9 +1058,8 @@ class _TimetablePageState extends State<TimetablePage> {
   }
 
   void _showCourseDetail(Course c) {
-    showModalBottomSheet(
+    showGlassSheet(
       context: context,
-      showDragHandle: true,
       builder: (_) => Padding(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
         child: Column(

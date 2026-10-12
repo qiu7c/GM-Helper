@@ -23,12 +23,20 @@ class ScheduleCache {
   /// 最多留几份，避免换账号/学期/校区后无限堆积
   static const _maxEntries = 6;
 
-  /// 超过这个时长就当作没有缓存。
-  ///
-  /// 只影响「很久没联上网」这一种情况：正常情况下每次打开 App 都会刷新并重新
-  /// 盖时间戳。放 30 天是因为再久就跨了半个学期，那份课表大概率已经不是现在
-  /// 这张了 —— 宁可显示空态让用户联网，也别拿旧数据误导。
-  static const _maxAge = Duration(days: 30);
+  // ⚠ **这里刻意没有"过期时间"。**
+  //
+  // 原来有一道 `_maxAge = 30 天`：太久的缓存当作没有。删掉的理由是它和用户的预期
+  // 相反 —— 只要没点过「退出登录」，课表就不该消失。30 天这道线会在"假期里断网很久
+  // 没打开 App"这种情况下把一份本来还有效的课表判死，用户看到的是空白 + 转圈，而
+  // 他什么都没做错。
+  //
+  // 删掉之后不会积累旧数据，因为：
+  //  * 每次联网成功都会**覆盖**同一把 key 的缓存（key 是 用户|学期|校区）；
+  //  * 学期换了就是另一把 key，不会串；
+  //  * 用户主动退出登录时 `clear()` 清掉全部。
+  //
+  // 也就是说，这份数据只在"用户没退出登录"这个前提下长期保留 —— 而那个前提正是
+  // 我们要的语义。
 
   static String _keyOf(String? user, String? term, String? campus) =>
       '${user ?? ''}|${term ?? ''}|${campus ?? ''}';
@@ -46,9 +54,10 @@ class ScheduleCache {
     }
   }
 
-  /// 读缓存。没有、坏了、过期了、或者是个空课表都返回 null。
+  /// 读缓存。没有、坏了、或者是个空课表都返回 null。
   ///
   /// 空课表特意当作"没有缓存"：宁可转圈，也别拿一份空表把用户的课表抹掉。
+  /// （注意这里**没有过期判定**，理由见 `_maxEntries` 上面那段。）
   static Future<ScheduleResult?> read({
     String? user,
     String? term,
@@ -58,7 +67,6 @@ class ScheduleCache {
     final entry = all[_keyOf(user, term, campus)];
     if (entry is! Map) return null;
     final e = entry.cast<String, dynamic>();
-    if (_expired(e)) return null;
     try {
       final courses = (e['courses'] as List? ?? const [])
           .whereType<Map>()
@@ -92,14 +100,8 @@ class ScheduleCache {
     return _timeOf(entry.cast<String, dynamic>());
   }
 
-  /// 时间戳缺失（早期版本写进去的、或数据被手工改过）一律不算过期 ——
-  /// 宁可多显示一份旧数据，也别因为读不到 'at' 就把缓存整个作废。
-  static bool _expired(Map<String, dynamic> e) {
-    final at = _timeOf(e);
-    if (at == null) return false;
-    return DateTime.now().difference(at) > _maxAge;
-  }
-
+  /// 时间戳缺失（早期版本写进去的、或数据被手工改过）不算异常 ——
+  /// 读不到 'at' 只影响"上次更新于多久前"那句提示，缓存本身照用。
   static DateTime? _timeOf(Map<String, dynamic> e) =>
       DateTime.tryParse((e['at'] ?? '').toString());
 

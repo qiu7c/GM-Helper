@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/course.dart';
 import '../models/period_time.dart';
+import 'app_theme.dart';
 
 /// 顶部那条实时状态：「正在上 XX · 还有 25 分钟下课」/「下一节 14:00 XX」。
 ///
@@ -32,16 +33,18 @@ class NowStatusBar extends StatelessWidget implements PreferredSizeWidget {
     this.campusId,
   });
 
-  // 下面三个高度是从布局里算出来的，改布局就得跟着改：
+  // 下面三个高度是从布局里算出来的，改布局就得跟着改。
   //
-  //  - 卡片：上下外边距 8+8，上下内边距 10+10，内容高 39.6（中间那列是最高的一
-  //    档：bodyLarge 15x1.4 = 21.0，加 3 的间隔，加 bodySmall 12x1.3 = 15.6。
-  //    左边那个 38x38 的图标块**不是**最高的），上课中再加 3 的进度条。
-  //    取 76 而不是 75.6，留 0.4 给 Skia 的定点舍入。
-  //  - 一行版：上下外边距 8+8，上下内边距 11+11，内容 18（图标）。
-  static const double _cardHeight = 76;
-  static const double _cardProgressHeight = 79;
-  static const double _doneHeight = 56;
+  // ⚠ 去掉卡片底色和描边之后这三个数**全变了**（原来是 76 / 79 / 56）：
+  //    现在没有外边距 8+8 了，只剩内边距 8+8。
+  //  - 上课中 / 下一节：内边距 8+8 + 内容 39.6（中间那列最高：bodyLarge
+  //    15×1.4 = 21.0，加 3 的间隔，加 bodySmall 12×1.3 = 15.6；左边那个
+  //    38×38 的图标块**不是**最高的）= 55.6，取 56 留 0.4 给 Skia 的定点舍入。
+  //  - 上课中再加进度条那一行：3 的间隔 + 3 的条 = 61.6，取 62。
+  //  - 一行版：8+8 + 内容 18（图标）= 34。
+  static const double _cardHeight = 56;
+  static const double _cardProgressHeight = 62;
+  static const double _doneHeight = 34;
 
   @override
   Size get preferredSize => Size.fromHeight(_resolve().height);
@@ -134,7 +137,14 @@ class NowStatusBar extends StatelessWidget implements PreferredSizeWidget {
   static String _room(Course c) =>
       c.room.trim().isEmpty ? '未填教室' : c.room.trim();
 
-  /// 上课中 / 下一节共用的一张卡。accent 为真时用主色强调（正在上）。
+  /// 上课中 / 下一节共用的一行。
+  ///
+  /// **没有卡片底色、也没有描边** —— 它和顶栏是同一块玻璃。这一版要拆掉的正是
+  /// "状态卡自己是一张卡、顶栏是另一块"那种分层感。
+  ///
+  /// 强调只靠**颜色**：正在上课用 [AppTheme.accent]（淡红）点亮图标底、下课时间
+  /// 和下面那条进度条；"下一节"保持灰阶。全 App 上色的地方就这一处和课表里
+  /// "今天"那一列。
   Widget _card({
     required ThemeData theme,
     required _Slot slot,
@@ -145,105 +155,95 @@ class NowStatusBar extends StatelessWidget implements PreferredSizeWidget {
     double? progress,
   }) {
     final scheme = theme.colorScheme;
-    final bg = accent ? scheme.primaryContainer : scheme.surfaceContainerLow;
-    final onCard = accent ? scheme.onPrimaryContainer : scheme.onSurface;
-    final subFg = accent
-        ? scheme.onPrimaryContainer.withOpacity(0.72)
-        : scheme.onSurfaceVariant;
+    final mark = accent ? AppTheme.accent : scheme.onSurfaceVariant;
+    final subFg = scheme.onSurfaceVariant;
 
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-      // 让底部那条进度条能贴着圆角裁掉，而不是悬在卡片里
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(14),
-        // 强调态本来就有底色，再描一圈反而显脏
-        border: accent ? null : Border.all(color: scheme.outlineVariant),
-      ),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 14, 8),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 14, 10),
-            child: Row(
-              children: [
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color: accent ? scheme.primary : scheme.secondaryContainer,
-                    borderRadius: BorderRadius.circular(11),
-                  ),
-                  child: Icon(icon,
-                      size: 22,
-                      color: accent
-                          ? scheme.onPrimary
-                          : scheme.onSecondaryContainer),
+          Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  // 只有一层很淡的强调色底，**不用实心色块** —— 实心块会把这块
+                  // 玻璃又变成"一张卡"，正是要拆掉的那个观感
+                  color: accent
+                      ? AppTheme.accent.withOpacity(0.16)
+                      : scheme.onSurface.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(11),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(slot.course.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodyLarge?.copyWith(
-                              fontWeight: FontWeight.w600, color: onCard)),
-                      const SizedBox(height: 3),
-                      Text(_room(slot.course),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                              color: subFg)),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                child: Icon(icon, size: 22, color: mark),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(big,
-                        style: theme.textTheme.headlineSmall?.copyWith(
-                            fontSize: 19,
-                            height: 1.1,
-                            fontWeight: FontWeight.w700,
-                            color: onCard)),
+                    Text(slot.course.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: scheme.onSurface)),
                     const SizedBox(height: 3),
-                    Text(small,
-                        style: theme.textTheme.labelMedium
-                            ?.copyWith(color: subFg)),
+                    Text(_room(slot.course),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style:
+                            theme.textTheme.bodySmall?.copyWith(color: subFg)),
                   ],
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 10),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(big,
+                      style: theme.textTheme.headlineSmall?.copyWith(
+                          fontSize: 19,
+                          height: 1.1,
+                          fontWeight: FontWeight.w700,
+                          color: accent ? AppTheme.accent : scheme.onSurface)),
+                  const SizedBox(height: 3),
+                  Text(small,
+                      style:
+                          theme.textTheme.labelMedium?.copyWith(color: subFg)),
+                ],
+              ),
+            ],
           ),
-          if (progress != null)
-            LinearProgressIndicator(
-              value: progress,
-              minHeight: 3,
-              backgroundColor: scheme.onPrimaryContainer.withOpacity(0.18),
-              color: scheme.primary,
+          if (progress != null) ...[
+            const SizedBox(height: 3),
+            // 圆角靠 ClipRRect：LinearProgressIndicator 自己是方的，
+            // 一条方头细线压在这块玻璃上很硬
+            ClipRRect(
+              borderRadius: BorderRadius.circular(2),
+              child: LinearProgressIndicator(
+                value: progress,
+                minHeight: 3,
+                backgroundColor: scheme.onSurface.withOpacity(0.10),
+                color: AppTheme.accent,
+              ),
             ),
+          ],
         ],
       ),
     );
   }
 
-  /// 今天的课全上完了：没有紧迫信息，就别摆那个时间列了，收敛成一行
+  /// 今天的课全上完了：没有紧迫信息，就别摆那个时间列了，收敛成一行。
+  ///
+  /// 同样**不要**底色和描边，理由见 [_card]。
   Widget _doneRow(ThemeData theme, String lastEnd) {
     final scheme = theme.colorScheme;
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: scheme.outlineVariant),
-      ),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 14, 8),
       child: Row(
         children: [
           Icon(Icons.done_all_rounded, size: 18, color: scheme.onSurfaceVariant),

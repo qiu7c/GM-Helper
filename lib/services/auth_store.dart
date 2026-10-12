@@ -14,10 +14,41 @@ class AuthStore {
   static const _kAutoLogin = 'auto_login';
   static const _kFirstMonday = 'term_first_monday';
   static const _kTotalWeeks = 'term_total_weeks';
+  static const _kBgStyle = 'bg_style';
+  static const _kBgImage = 'bg_image';
+  static const _kBgBlur = 'bg_blur';
+  static const _kThemeMode = 'theme_mode';
+
+  /// 深浅色：0 跟随系统 / 1 浅色 / 2 深色（就是 `ThemeMode.index`）
+  static Future<void> saveThemeMode(int v) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setInt(_kThemeMode, v);
+  }
+
+  static Future<int?> getThemeMode() async {
+    final sp = await SharedPreferences.getInstance();
+    try {
+      return sp.getInt(_kThemeMode);
+    } catch (_) {
+      // 和 getBgBlur 同理：这个方法在启动路径上，读不出来就当没设过
+      return null;
+    }
+  }
 
   /// 登录状态变更通知：saveCookie / clear 后自增，
   /// 供「我的」等页面监听后重新检查，避免切页时还显示旧的未登录状态。
   static final ValueNotifier<int> authRevision = ValueNotifier(0);
+
+  /// **用户主动退出登录**的通知，和"会话过期"分开。
+  ///
+  /// 页面必须能分清这两件事：
+  ///  * 会话过期：[clearSession] —— 课表仍然有效，要留在屏幕上让用户还能看；
+  ///  * 主动退出：[clear] —— 用户的本意是"别再让人看到"，那么**连内存里那份
+  ///    课表也得清掉**。只清磁盘缓存是不够的：课表页活在 `IndexedStack` 里，
+  ///    内存里的解析结果还在，切回去照样画得出来，等于没清干净。
+  ///
+  /// 所以不能复用 [authRevision] —— 那个两条路都会自增（见 [clearSession]）。
+  static final ValueNotifier<int> logoutRevision = ValueNotifier(0);
 
   /// 保存登录后抓取到的 Cookie 字符串（形如 "JSESSIONID=xxx; ..."）
   static Future<void> saveCookie(String cookie) async {
@@ -67,6 +98,8 @@ class AuthStore {
   static Future<void> clear() async {
     await clearSession();
     await ScheduleCache.clear();
+    // 通知页面把内存里那份课表也丢掉（见 [logoutRevision]）
+    logoutRevision.value++;
   }
 
   static Future<bool> isLoggedIn() async {
@@ -167,5 +200,47 @@ class AuthStore {
   static Future<int?> getTotalWeeks() async {
     final sp = await SharedPreferences.getInstance();
     return sp.getInt(_kTotalWeeks);
+  }
+
+  /// 背景方案 id。取值见 `widgets/glass_backdrop.dart` 里的 `kBackdropStyles`。
+  static Future<void> saveBgStyle(int id) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setInt(_kBgStyle, id);
+  }
+
+  static Future<int?> getBgStyle() async {
+    final sp = await SharedPreferences.getInstance();
+    return sp.getInt(_kBgStyle);
+  }
+
+  /// 自定义背景图的路径（已拷进 App 私有目录）。空串表示没有自定义图 ——
+  /// `SharedPreferences` 没有"删除后读回 null"以外的语义，所以用空串代替 null。
+  static Future<void> saveBgImage(String path) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_kBgImage, path);
+  }
+
+  static Future<String?> getBgImage() async {
+    final sp = await SharedPreferences.getInstance();
+    final v = sp.getString(_kBgImage);
+    return (v == null || v.isEmpty) ? null : v;
+  }
+
+  /// 自定义背景图的模糊半径（逻辑像素）
+  static Future<void> saveBgBlur(double v) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setDouble(_kBgBlur, v);
+  }
+
+  static Future<double?> getBgBlur() async {
+    final sp = await SharedPreferences.getInstance();
+    // Android 存 double 用的是「前缀 + 数值」的字符串格式，类型对不上时 getDouble 会
+    // 直接抛。这个方法在启动路径上（SchedulePrefs.load），抛出去会把整个启动带崩，
+    // 所以这里兜住：读不出来就当没设过，用默认值。
+    try {
+      return sp.getDouble(_kBgBlur);
+    } catch (_) {
+      return null;
+    }
   }
 }
