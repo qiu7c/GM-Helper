@@ -136,6 +136,12 @@ jobs:
         with:
           name: gdgm-schedule-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+          # ⚠ 这两份产物只是给同一次运行的 release job 取件用的**中转**，真正的分发
+          # 是 Release 附件。默认保留 90 天，几十次构建就能把 Free 套餐那 500MB
+          # 存储额度撑满（实测 53 个产物 1215MB），然后 upload-artifact 直接失败、
+          # build-android 被判失败、release job 的 needs 不满足 —— 表现成「构建挂了」
+          # 但其实编译是成功的。1 天足够 release job 取到，也不会再堆起来。
+          retention-days: 1
 
   # ---------- 打包 iOS（未签名，仅用于自行侧载/自签）----------
   #
@@ -202,6 +208,8 @@ jobs:
         with:
           name: gdgm-schedule-ipa-unsigned
           path: build/ios/iphoneos/app-unsigned.ipa
+          # 同 APK 那条：只作中转，1 天后自动清掉，别把存储额度撑满
+          retention-days: 1
 
   # ---------- 发布到「公开分发仓」（APK + 未签名 IPA）----------
   #
