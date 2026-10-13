@@ -2,8 +2,11 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../services/update_notifier.dart';
+import '../services/update_service.dart';
 import '../widgets/glass_backdrop.dart';
 import '../widgets/glass_nav_bar.dart';
+import '../widgets/update_prompt.dart';
 import 'profile_page.dart';
 import 'timetable_page.dart';
 
@@ -15,38 +18,59 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell>
-    with SingleTickerProviderStateMixin {
+class _HomeShellState extends State<HomeShell> {
   int _index = 0;
 
   // 用 key 让切回"我的"时能重新检查登录状态
   final _profileKey = GlobalKey();
 
-  /// 切标签页时的淡入。
-  ///
-  /// **这里必须继续用 `IndexedStack`**，换 `PageView` 不只是换个写法：
-  /// `IndexedStack` 会把两个子页面**都**构建出来（两个 `initState` 都会跑），
-  /// 而这个 App 是**故意**依赖"启动时两页同时发请求、同时判出会话失效"这个
-  /// 交错的 —— profile_page 里那段 `clearSession(failedCookie:)` 就是为它写的。
-  /// `PageView` 只构建可见页，「我的」启动时压根不会构造，那条竞态就消失了，
-  /// 等于顺手改了启动逻辑，不属于"换个皮"该干的事。
-  late final AnimationController _tabAnim = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 220),
-    // 从"已播完"开始，免得第一帧无端闪一下
-    value: 1,
-  );
-
   @override
-  void dispose() {
-    _tabAnim.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    // 启动检测更新。等第一帧画完再发，别跟首屏那两个请求抢网络和主线程。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _autoCheckUpdate());
   }
 
+  /// 每次启动查一次有没有新版本。
+  ///
+  /// 只有**真的发现**新版本才打扰用户：发一条系统通知 + 弹一个 App 内弹窗。
+  /// 同一个版本只提醒一次（`UpdateService.announceOnce`）—— 检测每次都跑，但每次
+  /// 启动都把同一个版本再弹一遍就成了骚扰。
+  ///
+  /// 任何失败（离线、加速站全挂、分发仓没建）都静默收场：检查更新失败不是用户的事。
+  Future<void> _autoCheckUpdate() async {
+    final info = await UpdateService.check();
+    if (info == null || !mounted) return;
+    if (!await UpdateService.announceOnce(info.version)) return;
+    // 先把下载线路在后台定下来，用户点「去下载」时就不用等
+    UpdateService.prefetchDownload(info);
+    await UpdateNotifier.show(info);
+    if (!mounted) return;
+    await showUpdatePrompt(context, info);
+  }
+
+  // ⚠ **切标签页没有过渡动画，这是故意的（原来是有的，删掉了）。**
+  //
+  // 原来这里是一个 220ms 的**全屏**淡入：`_select` 里 `_tabAnim.forward(from: 0)`，
+  // body 套一层 `FadeTransition(begin: 0.55, end: 1.0)`。
+  //
+  // 它在实机 iOS 上正是用户报的那个"延迟动画"：点一下底栏，新页面的内容从 55% 不
+  // 透明度糊到 100%，两百多毫秒里"内容才慢慢出来"。而且 `FadeTransition` 的 opacity
+  // 只要不是 1 就得开一次 `saveLayer` —— 那是**整屏**、每帧一次，还压在玻璃模糊上，
+  // 于是又糊又卡。
+  //
+  // 更要紧的是：**iOS 原生 TabBar 切页是瞬间的，本来就没有淡入。** 这个动画没让它
+  // 更精致，只让它不像 iOS 该有的样子。切页就该是瞬时的。
+  //
+  // 只删动画，`IndexedStack` 照旧 —— 换 `PageView` 是另一件事：
+  // `IndexedStack` 会把两个子页面**都**构建出来（两个 `initState` 都会跑），而这个
+  // App 是**故意**依赖"启动时两页同时发请求、同时判出会话失效"这个交错的 ——
+  // profile_page 里那段 `clearSession(failedCookie:)` 就是为它写的。
+  // `PageView` 只构建可见页，「我的」启动时压根不会构造，那条竞态就消失了，
+  // 等于顺手改了启动逻辑，不属于"换个皮"该干的事。
   void _select(int i) {
     if (i == _index) return;
     setState(() => _index = i);
-    _tabAnim.forward(from: 0);
   }
 
   /// 底栏离屏幕底边的距离。
@@ -78,17 +102,12 @@ class _HomeShellState extends State<HomeShell>
         // 不写 expand 的话 Stack 会给子节点松约束，两个页面会被缩成内容高
         fit: StackFit.expand,
         children: [
-          FadeTransition(
-            opacity: Tween<double>(begin: 0.55, end: 1.0).animate(
-              CurvedAnimation(parent: _tabAnim, curve: Curves.easeOut),
-            ),
-            child: IndexedStack(
-              index: _index,
-              children: [
-                const TimetablePage(),
-                ProfilePage(key: _profileKey),
-              ],
-            ),
+          IndexedStack(
+            index: _index,
+            children: [
+              const TimetablePage(),
+              ProfilePage(key: _profileKey),
+            ],
           ),
           // 底部渐变遮罩。放在 **body 里**（不是放进 bottomNavigationBar）：底栏槽位
           // 的高度是内容撑出来的，放进去就不好控制它往上延伸多少；放在 body 里可以

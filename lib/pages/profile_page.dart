@@ -140,63 +140,16 @@ class _ProfilePageState extends State<ProfilePage> {
     // `_check()` 会自己刷成未登录态。
   }
 
-  // ---------- 入场 ----------
+  // ---------- 关于入场动画 ----------
   //
-  // 每行往上挪 8px + 淡入，按序号依次错开。总时长压在 460ms：前 6 行逐步跟上来，
-  // 再往后的行不再往后推 —— 学籍信息可能有十几条，一路 35ms 错下去最后一行要等
-  // 大半秒才出现，那就不是"入场"是"加载慢"了。
+  // **没有了，是故意删掉的。** 和设置页一样。
   //
-  // 设置页用的是同一组数字，两页切换时的节奏才一致。
-
-  // ⚠ **没有淡入，只有位移。** 和设置页同一组数字。
+  // 原来是每行往上挪 8px（更早还叠着 opacity 0→1 的淡入），按序号依次错开，总时长
+  // 260ms。实机 iOS 上用户连着两轮反馈「点进新页面会先看到上一个页面一闪而过」和
+  // 「动画还是有延迟」—— 上一轮只删了淡入、留着位移和错开，还是不行。问题在**错开**
+  // 本身：内容不是一次到位，而是一行一行排队出现，那就是"延迟"。
   //
-  // 原来这里（和设置页）是 opacity 0→1 配位移，总时长 460ms。实机 iOS 上用户报
-  // 「点进新页面会先看到上一个页面一闪而过」和「动画延迟卡顿」，根因是淡入：
-  // 页面背景透明（`GlassBackdrop` 在 Navigator 后面），转场那几百毫秒里新页面几乎
-  // 整页全透明 → 看到的是还在退场的上一个页面；而每行一次 `Opacity` 就是一次
-  // `saveLayer`，一屏七八次，iOS 上很贵。
-  //
-  // 位移留着（`Transform` 便宜得多），第一帧就有内容。
-  static const Duration _enterTotal = Duration(milliseconds: 260);
-  static const Duration _enterStep = Duration(milliseconds: 18);
-  static const int _enterMaxStep = 4;
-
-  /// 给列表每一项套上入场动画。纯占位的间距和分割线不算进度，跳过它们。
-  List<Widget> _entered(List<Widget> children) {
-    final out = <Widget>[];
-    var i = 0;
-    for (final c in children) {
-      if (c is SizedBox || c is Divider) {
-        out.add(c);
-      } else {
-        out.add(_enter(i++, c));
-      }
-    }
-    return out;
-  }
-
-  Widget _enter(int i, Widget child) {
-    final total = _enterTotal.inMilliseconds.toDouble();
-    final step = _enterStep.inMilliseconds *
-        (i < _enterMaxStep ? i : _enterMaxStep);
-    final start = step / total;
-
-    // 用一个共同时长 + 各自的 Interval 来错开，而不是给每行不同的 duration ——
-    // 那只会让后面的行播得慢，不是"依次开始"。
-    //
-    // TweenAnimationBuilder 只在 end 变了的时候才重播，所以 _check() 刷新列表
-    // 不会让整页重新入场；新插进来的行因为是新的 element，会正常入场。
-    return TweenAnimationBuilder<double>(
-      tween: Tween<double>(begin: 0, end: 1),
-      duration: _enterTotal,
-      curve: Interval(start, 1, curve: Curves.easeOut),
-      builder: (_, t, inner) => Transform.translate(
-        offset: Offset(0, 8 * (1 - t)),
-        child: inner,
-      ),
-      child: child,
-    );
-  }
+  // 现在列表原样返回：推入的这一帧就有全部内容。
 
   Widget _header() {
     if (_status == _Status.loggedIn && _profile != null) {
@@ -394,9 +347,8 @@ class _ProfilePageState extends State<ProfilePage> {
               child: Column(
                 // 不 stretch 的话 Column 默认 center，ListTile 会被缩成内容宽
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: _entered([
+                children: [
                   // 头像/姓名这一段原来只让开 24，视觉上是"贴着状态栏"。让开的这一截
-                  // 不参与入场动画（`_entered` 会跳过 SizedBox）。
                   const SizedBox(height: 56),
                   _header(),
                   const SizedBox(height: 24),
@@ -430,7 +382,7 @@ class _ProfilePageState extends State<ProfilePage> {
                       onTap: _logout,
                     ),
                   const SizedBox(height: 16),
-                ]),
+                ],
               ),
             ),
           );

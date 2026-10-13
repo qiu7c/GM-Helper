@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 
+import 'glass_backdrop.dart';
+
 /// 全 App 的配色与尺寸 token，以及组件主题。
 ///
 /// 之前这份文件只有 24 行、只给了一个种子色 —— 没有 `textTheme`、没有
@@ -117,6 +119,39 @@ class AppTheme {
 
   static ThemeData dark() => _base(Brightness.dark);
 
+  /// 每个推入的页面**自带一层不透明的底**，页面之间才互相遮得住。
+  ///
+  /// 起因是用户反馈：「设置页进去还是会有上个页面的内容，不够丝滑」。
+  ///
+  /// 根子在 `main.dart` —— 毛玻璃底画在整个 Navigator **下面**（一处画、全树共用），
+  /// 所以每个页面的 `Scaffold` 都是**透明**的。路由推入那 300ms 里新页面几乎整页
+  /// 透明，上一个页面的内容直接从它身上透出来；列表页的 ListTile 自己没有底色，
+  /// 透出来的面积还特别大。这不是转场时长的问题，是新页面**没有遮住**旧页面。
+  ///
+  /// 修法是让每个路由自己画一层同样的底：观感完全不变（画的是同一套色斑/照片），
+  /// 但页面变成**不透明**的，转场时把旧页面结结实实盖住。
+  ///
+  /// ⚠ 为什么挂在 `PageTransitionsBuilder` 上：这是唯一一个「每个 `MaterialPageRoute`
+  /// 都会经过、而且能包住整页」的公开扩展点（`buildTransitions` 收到的 `child` 就是
+  /// 整页），一处改动覆盖所有推入的页面，不用逐页去包。平台原本的转场原样套在里面，
+  /// 一点没动 —— 3.24 的 `PageTransitionsBuilder` 只有 `buildTransitions` 一个方法，
+  /// 所以也没有别的要转发（iOS 侧滑返回那套不在这个类里）。
+  ///
+  /// **不会误伤静默登录**：那条路由是 `PageRouteBuilder`（见 `auto_login.dart` 的
+  /// `_SilentLoginRoute`），它走自己的 `transitionsBuilder`，**不经过主题里这个**，
+  /// 所以自动登录期间底下那张课表照样透出来 —— 那正是它存在的意义。
+  static const PageTransitionsTheme _transitions = PageTransitionsTheme(
+    builders: {
+      TargetPlatform.android: _BackdropTransitions(ZoomPageTransitionsBuilder()),
+      TargetPlatform.iOS: _BackdropTransitions(CupertinoPageTransitionsBuilder()),
+      TargetPlatform.macOS:
+          _BackdropTransitions(CupertinoPageTransitionsBuilder()),
+      TargetPlatform.fuchsia: _BackdropTransitions(ZoomPageTransitionsBuilder()),
+      TargetPlatform.linux: _BackdropTransitions(ZoomPageTransitionsBuilder()),
+      TargetPlatform.windows: _BackdropTransitions(ZoomPageTransitionsBuilder()),
+    },
+  );
+
   static ThemeData _base(Brightness brightness) {
     final isDark = brightness == Brightness.dark;
     // neutral 变体：M3 默认的 tonalSpot 会从种子里抽出一点色相掺进各个槽位，
@@ -135,9 +170,14 @@ class AppTheme {
       // ⚠ 全 App 的 Scaffold 都透明，因为"底"是 `GlassBackdrop` 画的（见 main.dart）。
       // 留一个不透明的底色，顶栏/底栏的玻璃背后就是那块纯色，模糊等于白做。
       //
-      // 写在**这一个**地方就够了：所有页面（含 push 出去的关于页、全学期总览、
-      // 更新日志）自动跟着走，不用逐页去设 backgroundColor。
+      // 写在**这一个**地方就够了：所有页面（含 push 出去的关于页、更新日志）
+      // 自动跟着走，不用逐页去设 backgroundColor。
+      //
+      // ⚠ 注意别把这里改成不透明来"遮住上一个页面"：那遮住的是**色斑**，顶栏底栏的
+      // 玻璃背后就成了纯色。页面之间互相遮挡是 `pageTransitionsTheme` 那边解决的 ——
+      // 每个路由**自己**画一层底，见下面的 `_transitions`。
       scaffoldBackgroundColor: Colors.transparent,
+      pageTransitionsTheme: _transitions,
       // 部分 TextTheme 交给 ThemeData 去 merge 到 Typography 默认上，
       // 没写的槽位会保住框架默认，不会变成 null
       textTheme: _text,
@@ -212,6 +252,43 @@ class AppTheme {
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(radiusMd),
         ),
+      ),
+    );
+  }
+}
+
+/// 把平台原本的页面转场**原样套在里面**，只在外面补一层页面自己的底。
+///
+/// 见 `AppTheme._transitions` 那段注释：目的不是改动画，是让新页面**不透明** ——
+/// 推入的那 300ms 里不要透出上一个页面的内容。
+class _BackdropTransitions extends PageTransitionsBuilder {
+  const _BackdropTransitions(this._inner);
+
+  /// 平台原本的那一套（iOS = Cupertino，安卓 = Zoom），一点不改地转发给它。
+  final PageTransitionsBuilder _inner;
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    return _inner.buildTransitions(
+      route,
+      context,
+      animation,
+      secondaryAnimation,
+      Stack(
+        // ⚠ expand 不能省：Stack 默认 loose，页面会被缩成内容高度、整页塌掉
+        fit: StackFit.expand,
+        children: [
+          // 这一层必须不透明 —— `GlassBackdrop` 的底色本身是不透明的，
+          // 页面之间互相遮挡全靠它
+          const GlassBackdrop(),
+          child,
+        ],
       ),
     );
   }

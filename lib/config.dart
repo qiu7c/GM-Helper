@@ -143,4 +143,13 @@ class AppConfig {
 
   /// 教务那几张页面（xsMain / 课表）体积不小，给宽裕一点，但一定要有上限
   static const Duration receiveTimeout = Duration(seconds: 20);
+
+  /// 访问教务系统用的 UA。
+  ///
+  /// 原本这个串在 schedule / profile / cas 三个 service 里各写了一份，一模一样。
+  /// 加连通性探针时本来要写第四份 —— 探针要是被学校那边按 UA 拦下来，就会被
+  /// 误判成"教务崩了"，那正是这个功能最不该出的错。所以收到一处，四处共用。
+  static const String userAgent =
+      'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 '
+      '(KHTML, like Gecko) Chrome/120 Mobile Safari/537.36';
 }

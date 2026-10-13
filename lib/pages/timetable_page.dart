@@ -7,6 +7,7 @@ import '../models/course.dart';
 import '../services/auth_store.dart';
 import '../services/auto_login.dart';
 import '../services/course_notes.dart';
+import '../services/jw_availability.dart';
 import '../services/schedule_cache.dart';
 import '../services/schedule_diff.dart';
 import '../services/schedule_prefs.dart';
@@ -17,13 +18,12 @@ import '../widgets/glass_dialog.dart';
 import '../widgets/now_status_bar.dart';
 import '../widgets/skeleton.dart';
 import '../widgets/timetable_grid.dart';
-import 'semester_page.dart';
 import 'share_image_page.dart';
 
 /// 顶栏「⋮」里收着的功能。
 ///
 /// 按日期跳转**不在此列**：那个是高频操作，留在外面当图标。
-enum _More { semester, shareImage }
+enum _More { shareImage }
 
 class TimetablePage extends StatefulWidget {
   const TimetablePage({super.key});
@@ -72,6 +72,12 @@ class _TimetablePageState extends State<TimetablePage> {
 
   /// 有缓存但联网刷新失败了，这里是原因
   String? _staleReason;
+
+  /// 这次失败是**学校那边**的事（教务崩了、或落在维护时段关闭），而不是自己的网络。
+  ///
+  /// 跟 `_needLogin` 一个道理：只认这个 bool，不去比对文案 —— 文案是给用户看的，
+  /// 随时会改。它决定横幅上说什么，也决定整页报错时是普通文案还是那张单独的卡。
+  bool _jwDown = false;
 
   /// 顶上那条横幅现在该不该"点一下去登录"。
   ///
@@ -243,6 +249,9 @@ class _TimetablePageState extends State<TimetablePage> {
           _staleReason = '登录已过期';
           _needLogin = true;
         });
+        // 先别提着手动登录：票本来可能是有效的、只是本地这份丢了 —— 悄悄登一次试试。
+        // 结果怎么样都不占屏（见 `_trySilentLogin`），失败就留着上面这条横幅。
+        _trySilentLogin();
         return;
       }
       _needLogin = true;
@@ -333,14 +342,16 @@ class _TimetablePageState extends State<TimetablePage> {
         // 登录"，哪怕他从来没点过退出登录。这条也是"没退出登录课表也会消失"那个反馈
         // 的来源。
         //
-        // 现在改成：有内容就留着，顶部挂一条"登录已过期"。那条横幅自己就是入口 ——
-        // 点它会走 _load，届时没有 Cookie，才会真的弹登录页。
+        // 现在改成：有内容就留着，顶部挂一条"登录已过期"，**同时自己悄悄登一次**
+        // （`_trySilentLogin`）。那条横幅自己也是入口 —— 静默登录没成、点它会走
+        // `_load`，届时没有 Cookie，才会真的弹登录页。
         if (_result != null) {
           setState(() {
             _loggingIn = false;
             _fromCache = true;
             _staleReason = '登录已过期';
           });
+          _trySilentLogin();
           return;
         }
         _goLogin();
@@ -348,6 +359,9 @@ class _TimetablePageState extends State<TimetablePage> {
       }
       setState(() {
         _loading = false;
+        // 先按原来的口径显示（"网络不可用 / 请求超时"这类），探针回来再改。
+        // ⚠ 不能让这里等探针：探测最坏要几秒，而"刷新失败"本来就该立刻出来。
+        _jwDown = false;
         if (_result != null) {
           // 缓存还能看，别整屏报错把人吓一跳，顶部挂一行提示就够
           _fromCache = true;
@@ -360,7 +374,20 @@ class _TimetablePageState extends State<TimetablePage> {
           _error = '加载失败：${_whyOffline(e)}';
         }
       });
+      _probeJwDown(seq);
     }
+  }
+
+  /// 出错之后补一次连通性探测：确认是**学校那边**的事，就把口径改成
+  /// 「教务系统暂时打不开」。
+  ///
+  /// 只在"还是最新那一轮"才写回（`seq` 的用法跟 `_load` 里一致）：探测期间用户
+  /// 可能已经手动重试成功、或者翻走了一周，这时再改文案就是拿一条过期的判断去
+  /// 扣新状态。
+  Future<void> _probeJwDown(int seq) async {
+    final down = await JwAvailability.schoolLooksDownNow();
+    if (!down || !mounted || seq != _loadSeq) return;
+    setState(() => _jwDown = true);
   }
 
   /// 把网络异常压成一句人话，挂在缓存提示后面
@@ -431,6 +458,46 @@ class _TimetablePageState extends State<TimetablePage> {
           '${c.room.isEmpty ? '' : '（${c.room}）'}',
         ),
       );
+
+  /// 会话失效时**先自己悄悄登一次**，不行就只挂着横幅等用户。
+  ///
+  /// ⚠ 这里用 `AutoLogin.attempt`（走透明路由，全程不占屏），**不是** `_goLogin()`：
+  /// 后者在自动登录不可用时会推出手动登录页，把课表顶掉 —— 而那正是之前修掉的毛病
+  /// （"屏幕上已经有课表就不弹登录页"）。用户没开自动登录时，一进 App 就被登录页顶掉
+  /// 课表，比挂一条横幅糟得多。
+  ///
+  /// 起因是一条真实反馈：「刚进首页就说登录状态失效，也不会自己尝试静默登录，
+  /// 得去『我的』界面点一次登录按钮才自动登上去」。
+  ///
+  /// 会话过期本来就常有（教务那边到期），可静默登录的入口原来只挂在「我的」页那一个
+  /// 按钮上（`ProfilePage._login`）—— 课表页这两条路（票失效 / 本地没票）都只是挂条
+  /// 横幅然后 return。于是"能自动登录"这件事，用户得先知道该去哪个页面点一下才享受得到。
+  ///
+  /// 全部门槛交给 `AutoLogin.isEnabled()`：存了密码、用户没点过退出登录（suppress）、
+  /// 本次启动没失败过、成功次数没超上限。不满足就什么都不做 —— 横幅照挂，用户自己决定。
+  Future<void> _trySilentLogin() async {
+    if (!mounted || _loginOpen || _loggingIn) return;
+    if (!await AutoLogin.isEnabled()) return;
+    if (!mounted) return;
+    _loginOpen = true;
+    // 横幅改成"正在自动登录"：这段时间可能十几秒，屏幕上没有别的动静，
+    // 不说清楚用户只会以为卡死了（和 `_goLogin` 里同样的理由）。
+    setState(() => _loggingIn = true);
+    try {
+      final res = await AutoLogin.attempt(context);
+      if (!mounted) return;
+      if (res.ok) {
+        // saveCookie 已经通知过 _onAuthChanged，那次 _load 正在跑；
+        // 这里再叫一次是保底（seq 机制保证不会互相覆盖）。
+        _load();
+      }
+      // 失败就什么都不做：不设 `_error`、不推登录页。横幅已经写着"登录已过期"，
+      // 用户点它、或者去「我的」都能接管。
+    } finally {
+      _loginOpen = false;
+      if (mounted) setState(() => _loggingIn = false);
+    }
+  }
 
   Future<void> _goLogin() async {
     if (!mounted || _loginOpen) return;
@@ -541,24 +608,7 @@ class _TimetablePageState extends State<TimetablePage> {
     }
   }
 
-  /// 全学期总览。挑中的那一周由那个页面 pop 回来。
-  Future<void> _openSemester() async {
-    final w = await Navigator.of(context).push<int>(
-      MaterialPageRoute(
-        builder: (_) => SemesterPage(
-          // 注意传的是整学期的课，不是当前这周的 —— 总览自己按周过滤
-          courses: _result?.courses ?? const [],
-          totalWeeks: _totalWeeks,
-          currentWeek: SchedulePrefs.instance.currentWeek(),
-          // 整学期课表那面要按校区画左侧的节次时间
-          campusId: _campus,
-        ),
-      ),
-    );
-    if (!mounted || w == null || w == _week) return;
-    setState(() => _week = w);
-    _load(keepSelection: true);
-  }
+  
 
   /// 导出图片。分享那一步在目标页里做，这里只管把当前这周的课带过去。
   Future<void> _openShareImage() async {
@@ -719,16 +769,8 @@ class _TimetablePageState extends State<TimetablePage> {
                     PopupMenuButton<_More>(
                       tooltip: '更多',
                       padding: EdgeInsets.zero,
-                      onSelected: (v) {
-                        if (v == _More.semester) {
-                          _openSemester();
-                        } else {
-                          _openShareImage();
-                        }
-                      },
+                      onSelected: (_) => _openShareImage(),
                       itemBuilder: (context) => [
-                        _menuItem(
-                            _More.semester, Icons.grid_view_outlined, '全学期总览'),
                         _menuItem(_More.shareImage, Icons.ios_share, '导出图片'),
                       ],
                       // 用 child 而不是 icon：这样宽度由我们说了算，
@@ -798,31 +840,53 @@ class _TimetablePageState extends State<TimetablePage> {
                 // 地方拦住课表格子
                 child: IgnorePointer(
                   ignoring: !show,
-                  child: Material(
-                    color: scheme.primaryContainer,
-                    elevation: 3,
-                    shadowColor: Colors.black26,
-                    borderRadius: BorderRadius.circular(22),
-                    clipBehavior: Clip.antiAlias,
-                    child: InkWell(
-                      onTap: () => _goWeek(curWeek),
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 8, 14, 8),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.today_outlined,
-                                size: 16, color: scheme.onPrimaryContainer),
-                            const SizedBox(width: 6),
-                            Text(
-                              '回到本周',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: scheme.onPrimaryContainer,
-                              ),
+                  child: DecoratedBox(
+                    // 阴影必须画在玻璃**外面**：GlassPanel 自己会 ClipRRect，
+                    // 画在里面会一起被裁掉，那这颗胶囊就成了贴在课表上的平板。
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(22),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.16),
+                          blurRadius: 14,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: GlassPanel(
+                      borderRadius: BorderRadius.circular(22),
+                      // 「厚」毛玻璃：比全局那档（AppTheme.glassFill / glassBlur）
+                      // 更实、更糊。全局那两个数是顶栏和底栏的量，跟着调会把整页
+                      // 的玻璃层次一起动掉，所以这颗胶囊单独给值。
+                      fillOpacity: 0.62,
+                      blur: 30,
+                      // 水波纹得有 Material 才画得出来。原来那层 Material 连同它的
+                      // 实心底色一起被玻璃取代了，所以这里只留透明的一层。
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: InkWell(
+                          onTap: () => _goWeek(curWeek),
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 8, 14, 8),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.today_outlined,
+                                    size: 16, color: scheme.onSurface),
+                                const SizedBox(width: 6),
+                                Text(
+                                  '回到本周',
+                                  // 底色不再是 primaryContainer，字色跟着换成
+                                  // onSurface —— 玻璃底其实是 surface 的渐变
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: scheme.onSurface,
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
+                          ),
                         ),
                       ),
                     ),
@@ -867,6 +931,71 @@ class _TimetablePageState extends State<TimetablePage> {
     );
   }
 
+  /// 整页报错时显示的东西。
+  ///
+  /// 「教务系统自己不在」单独给一张卡，而不是把「加载失败：网络不可用」再念一遍：
+  /// 这条信息对用户是有用的 —— 它说明**问题不在他这边**，刷新、检查网络都没意义，
+  /// 等一会儿再来就行。学校教务在维护时段关闭是常态。
+  Widget _errorView() {
+    final scheme = Theme.of(context).colorScheme;
+    final retry = FilledButton(
+      onPressed: () => _load(keepSelection: true),
+      child: const Text('重试'),
+    );
+
+    if (!_jwDown) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(_error!, textAlign: TextAlign.center),
+          const SizedBox(height: 12),
+          retry,
+          TextButton(onPressed: _goLogin, child: const Text('重新登录')),
+        ],
+      );
+    }
+
+    return ConstrainedBox(
+      // 卡不能跟着屏幕一起变宽，宽屏上会成一条横幅
+      constraints: const BoxConstraints(maxWidth: 320),
+      child: GlassPanel(
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 22, 24, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.school_outlined,
+                  size: 34, color: scheme.onSurfaceVariant),
+              const SizedBox(height: 12),
+              Text(
+                '教务系统暂时打不开',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: scheme.onSurface,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '学校教务系统有时会崩溃，或者在维护时段关闭。\n'
+                '这不是你这边的问题，过一会儿再来。',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.5,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 14),
+              retry,
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildBody() {
     // 整块包一个 Builder：三个分支都要用 Scaffold **换过**的内边距（悬浮底栏
     // 换过的那份 bottom），而 `_buildBody()` 的 context 在 Scaffold 之上，读到的
@@ -891,20 +1020,7 @@ class _TimetablePageState extends State<TimetablePage> {
         // Center 在让开之后的区域里居中
         return Padding(
           padding: pad,
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(_error!, textAlign: TextAlign.center),
-                const SizedBox(height: 12),
-                FilledButton(
-                  onPressed: () => _load(keepSelection: true),
-                  child: const Text('重试'),
-                ),
-                TextButton(onPressed: _goLogin, child: const Text('重新登录')),
-              ],
-            ),
-          ),
+          child: Center(child: _errorView()),
         );
       }
       // 成功之后整页就是**一条**滚动。
@@ -985,9 +1101,12 @@ class _TimetablePageState extends State<TimetablePage> {
   Widget _staleBanner() {
     final scheme = Theme.of(context).colorScheme;
     final busy = _staleReason == null;
+    // 教务系统自己不在的时候说法要变：「网络不可用」会把锅甩给用户，而这种时候
+    // 他做什么都没用（理由见 JwAvailability 那段注释）。
+    final reason = _jwDown ? '教务系统暂时打不开' : _staleReason;
     final text = busy
         ? (_loggingIn ? '登录已过期，正在自动重新登录…' : '正在更新课表…')
-        : '$_staleReason，${_cacheHint()} · 点此重试';
+        : '$reason，${_cacheHint()} · 点此重试';
 
     // 高度写死（见 `_bannerHeight`）：它住在 AppBar.bottom 里，顶栏的高度得在
     // 建的时候就知道。内边距和内容都按这个数配的，SizedBox 是保证一致性的那一下。
@@ -1017,7 +1136,7 @@ class _TimetablePageState extends State<TimetablePage> {
                   child: busy
                       ? CircularProgressIndicator(
                           strokeWidth: 2, color: scheme.primary)
-                      : Icon(Icons.cloud_off,
+                      : Icon(_jwDown ? Icons.school_outlined : Icons.cloud_off,
                           size: 16, color: scheme.onSurfaceVariant),
                 ),
                 const SizedBox(width: 8),

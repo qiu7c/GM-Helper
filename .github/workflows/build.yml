@@ -315,6 +315,10 @@ jobs:
             printf '{\n'
             printf '  "version": "%s",\n' "$V"
             printf '  "versionCode": %s,\n' "$B"
+            # 加速线路也从清单远程下发（App 里那份只是兜底）。要换线路改这一行就行，
+            # 不用为了换条线路发一次新版 —— 第三方加速站是会倒闭的。
+            # 顺序按实测速度排；App 拿到后是并发试用的，谁先回来用谁。
+            printf '  "mirrors": ["https://gh-proxy.com/", "https://gh.llkk.cc/", "https://ghfast.top/", "https://ghproxy.net/"],\n'
             printf '  "notes": %s,\n' "$(cat notes.json)"
             printf '  "apk": "%s/GMPluse-v%s.apk",\n' "$BASE" "$V"
             if [ -f "dist/GMPluse-v$V-unsigned.ipa" ]; then

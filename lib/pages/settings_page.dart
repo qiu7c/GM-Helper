@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../models/course.dart';
 import '../services/app_info.dart';
@@ -13,6 +12,7 @@ import '../services/schedule_service.dart';
 import '../services/update_service.dart';
 import '../widgets/glass_backdrop.dart';
 import '../widgets/glass_dialog.dart';
+import '../widgets/update_prompt.dart';
 import 'about_page.dart';
 
 /// 设置页：从「我的」收纳过来的全部可改项。
@@ -422,7 +422,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
       onTap: _checkingUpdate
           ? null
-          : (up == null ? _manualCheckUpdate : () => _offerUpdate(up)),
+          : (up == null ? _manualCheckUpdate : () => showUpdatePrompt(context, up)),
     );
   }
 
@@ -431,6 +431,8 @@ class _SettingsPageState extends State<SettingsPage> {
     final info = await UpdateService.check();
     if (!mounted) return;
     setState(() => _update = info);
+    // 顺手把下载线路定下来（后台做，不挡界面）
+    if (info != null) UpdateService.prefetchDownload(info);
   }
 
   /// 用户主动点的那次：这次要有反馈，不能像进页时那样静默
@@ -446,48 +448,8 @@ class _SettingsPageState extends State<SettingsPage> {
       _toast('已是最新版本（${AppInfo.version}）');
       return;
     }
-    await _offerUpdate(info);
-  }
-
-  /// 提示有新版本，并给出下载入口。
-  ///
-  /// 不在 App 里下载安装：Android 要申请「安装未知应用」权限，iOS 的未签名
-  /// IPA 又必须走 TrollStore。两条路都丢给系统浏览器最省事，也最不容易出错。
-  Future<void> _offerUpdate(UpdateInfo info) async {
-    final url = UpdateService.downloadUrlFor(info);
-    await showGlassDialog<void>(
-      context: context,
-      title: Text('发现新版本 ${info.version}'),
-      content: Text(info.notes.isEmpty
-          ? '当前 ${AppInfo.version}，可以更新到 ${info.version}。'
-          : info.notes),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('以后再说'),
-        ),
-        if (url != null)
-          FilledButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              _openDownload(url);
-            },
-            child: const Text('去下载'),
-          ),
-      ],
-    );
-  }
-
-  Future<void> _openDownload(String url) async {
-    try {
-      // 不用 canLaunchUrl：它在 Android 11+ 要在 manifest 里声明 <queries>，
-      // 直接 launch、失败就 catch，能省掉一处平台配置。
-      final ok = await launchUrl(Uri.parse(url),
-          mode: LaunchMode.externalApplication);
-      if (!ok && mounted) _toast('打不开浏览器，请手动访问：$url');
-    } catch (_) {
-      if (mounted) _toast('打不开浏览器，请手动访问：$url');
-    }
+    UpdateService.prefetchDownload(info);
+    await showUpdatePrompt(context, info);
   }
 
   // 「退出登录」搬去「我的」页了（连同它的确认框）。理由：它属于"我是谁"这个话题的
@@ -520,54 +482,17 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
       );
 
-  // ---------- 入场 ----------
+  // ---------- 关于入场动画 ----------
   //
-  // 入场动画 = 每行往上挪 8px，按序号依次错开。
+  // **没有了，是故意删掉的。**
   //
-  // ⚠ **这里故意没有淡入（Opacity）。** 原来有：opacity 0→1 配位移，总时长 460ms。
-  // 实机 iOS 上用户报了两件事 ——「点进新页面会先看到上一个页面一闪而过」和
-  // 「动画延迟卡顿」，两件都出在这个淡入上：
+  // 原来这一排是：每行往上挪 8px（更早还叠着 opacity 0→1 的淡入），按序号依次错开，
+  // 总时长 260ms。实机 iOS 上用户连着两轮反馈「点进新页面会先看到上一个页面一闪而过」
+  // 和「动画还是有延迟」—— 上一轮我只删了淡入、留着位移和错开，还是不行。原因就在
+  // **错开**本身：内容不是一次到位，而是一行一行排队出现，那就是"延迟"。
   //
-  //  * 页面背景是**透明**的（`GlassBackdrop` 画在整个 Navigator 后面，见 main.dart），
-  //    所以新页面在推入转场那几百毫秒里几乎**整页全透明** —— 眼睛看到的就是那个还在
-  //    退场的上一个页面，然后内容才"加载"出来。这不是转场慢，是新页面当时真的没画东西。
-  //  * 每一行的 `Opacity` 都是一次 `saveLayer`，一屏七八行就是七八次。iOS 上这个很贵。
-  //
-  // 位移留着（`Transform` 比 `saveLayer` 便宜得多），翻页照样有层次，
-  // 但**第一帧就是有内容的** —— 这才是"不闪上一个页面"的关键。
-  static const Duration _enterTotal = Duration(milliseconds: 260);
-  static const Duration _enterStep = Duration(milliseconds: 18);
-  static const int _enterMaxStep = 4;
-
-  List<Widget> _entered(List<Widget> children) {
-    final out = <Widget>[];
-    var i = 0;
-    for (final c in children) {
-      if (c is SizedBox || c is Divider) {
-        out.add(c);
-      } else {
-        out.add(_enter(i++, c));
-      }
-    }
-    return out;
-  }
-
-  Widget _enter(int i, Widget child) {
-    final total = _enterTotal.inMilliseconds.toDouble();
-    final step =
-        _enterStep.inMilliseconds * (i < _enterMaxStep ? i : _enterMaxStep);
-    final start = step / total;
-    return TweenAnimationBuilder<double>(
-      tween: Tween<double>(begin: 0, end: 1),
-      duration: _enterTotal,
-      curve: Interval(start, 1, curve: Curves.easeOut),
-      builder: (_, t, inner) => Transform.translate(
-        offset: Offset(0, 8 * (1 - t)),
-        child: inner,
-      ),
-      child: child,
-    );
-  }
+  // 现在列表原样返回：**推入的这一帧就有全部内容**。翻页的层次感交给系统自己的路由
+  // 转场（那才是 iOS 用户认得的那一个），不该在这里再叠第二层。
 
   @override
   Widget build(BuildContext context) {
@@ -586,7 +511,7 @@ class _SettingsPageState extends State<SettingsPage> {
               padding: media.padding,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: _entered([
+                children: [
                   const SizedBox(height: 8),
                   _sectionTitle('外观'),
                   _themeTile(),
@@ -624,7 +549,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                ]),
+                ],
               ),
             ),
           );

@@ -1,7 +1,7 @@
 name: gdgm_schedule
 description: GMPluse - 广东工贸职业技术学院校园助手 (Android/iOS)
 publish_to: 'none'
-version: 2.2.3+15
+version: 2.2.4+16
 
 environment:
   sdk: '>=3.5.0 <4.0.0'
@@ -33,6 +33,10 @@ dependencies:
   share_plus: ^10.0.0
   image_picker: ^1.1.2
   path_provider: ^2.1.5
+  # 发现新版本时发一条系统通知（启动自动检测那套）。
+  # 锁 17.x：18/19 要求 compileSdk 35，而本项目跟着 Flutter 3.24.5 是 34。
+  # 另外它要求 core library desugaring，见 android/app/build.gradle。
+  flutter_local_notifications: ^17.2.4
 
 dev_dependencies:
   # 单元测试。项目此前零测试，test/ 下的用例依赖它；不声明的话

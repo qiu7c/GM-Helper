@@ -38,9 +38,7 @@ class ProfileService {
           receiveTimeout: AppConfig.receiveTimeout,
           headers: {
             'Cookie': cookie,
-            'User-Agent':
-                'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 '
-                    '(KHTML, like Gecko) Chrome/120 Mobile Safari/537.36',
+            'User-Agent': AppConfig.userAgent,
             'Referer': '${AppConfig.jwHost}/jsxsd/framework/xsMain.jsp',
           },
         ));
