@@ -316,6 +316,22 @@ class _TimetablePageState extends State<TimetablePage> {
       }
     } catch (e) {
       if (!mounted || seq != _loadSeq) return;
+      // 教务自己答了个不是课表的页面（维护时段 / 刚重启），而且服务层已经探过
+      // 学校那边、确认是它的问题。**这不是用户掉了登录** —— 用户的票是好的，
+      // 删了才真的得重新登一次。所以这里既不清会话、也不发起登录，只把口径改成
+      // 「教务系统暂时打不开」，等它自己好。
+      if (e == ScheduleService.schoolDown) {
+        setState(() {
+          _loading = false;
+          _jwDown = true;
+          if (_result != null) {
+            _fromCache = true;
+          } else {
+            _error = null;
+          }
+        });
+        return;
+      }
       if (e == ScheduleService.sessionExpired) {
         // 先让出这一轮，再弹登录页：否则登录成功后的那次 _load 会被
         // 自己这轮的 seq 挡掉

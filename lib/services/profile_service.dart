@@ -3,6 +3,7 @@ import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 
 import '../config.dart';
+import 'jw_availability.dart';
 import 'session_guard.dart';
 
 /// 学籍/个人信息
@@ -45,6 +46,10 @@ class ProfileService {
 
   /// 抛出该异常表示会话已失效，需要重新登录
   static const sessionExpired = 'SESSION_EXPIRED';
+
+  /// 抛出该异常表示**不是**用户掉了登录，而是学校那边答不出业务页面
+  /// （维护时段、刚重启、502 之后的兜底页）。见 `fetch` 里那段判据。
+  static const schoolDown = 'SCHOOL_DOWN';
 
   /// 学生桌面页（含 .middletopttxlr 个人信息块：姓名/学号/院系/专业/班级）
   static const String _desktopUrl =
@@ -113,6 +118,10 @@ class ProfileService {
     // 认不出来）。真账号一定有姓名，所以"全空"只可能是没登进去。
     // 不在这里拦住的话，「我的」页会显示成"已登录但所有字段都是空的"。
     if (gotPage && name.isEmpty && studentId.isEmpty && fields.isEmpty) {
+      // 同 schedule_service 里那条：这张页面既不是业务页、也没有登录页特征，
+      // "会话失效"和"教务自己答了个别的页面"在这里长得一样。清会话是不可逆的，
+      // 所以先探一次学校那边 —— 探到学校有问题就按可用性问题报，别删用户的票。
+      if (await JwAvailability.schoolLooksDownNow()) throw schoolDown;
       throw sessionExpired;
     }
 

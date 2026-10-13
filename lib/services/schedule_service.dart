@@ -4,6 +4,7 @@ import 'package:html/parser.dart' as html_parser;
 
 import '../config.dart';
 import '../models/course.dart';
+import 'jw_availability.dart';
 import 'session_guard.dart';
 
 /// 拉取并解析教务系统课表
@@ -26,6 +27,10 @@ class ScheduleService {
 
   /// 抛出该异常表示会话已失效，需要重新登录
   static const sessionExpired = 'SESSION_EXPIRED';
+
+  /// 抛出该异常表示**不是**用户掉了登录，而是学校那边答不出业务页面
+  /// （维护时段、刚重启、502 之后的兜底页）。见 `fetch` 里那段判据。
+  static const schoolDown = 'SCHOOL_DOWN';
 
   /// 课表页的**自有**结构锚点：真页面上至少有其中一个。
   ///
@@ -132,6 +137,21 @@ class ScheduleService {
     //    那种情况不该误判成会话失效（否则一断网就把登录态清了）。
     if (resp.statusCode == 200 &&
         !SessionGuard.containsAnyOf(body, _timetableAnchors)) {
+      // 拿到的不是课表页。这有两种可能，而它们对用户意味着完全相反的事：
+      //   1. 会话真的失效了（教务未登录时回的就是一个 200 的登录页）；
+      //   2. 教务自己出了状况 —— 维护时段、刚重启、502 之后的兜底页 —— 它回的
+      //      页面同样既不是课表、也没有登录页特征。
+      //
+      // 实测"真失效"那种情况正文里有「请先登录系统」，已经被 [SessionGuard] 在
+      // 上面那条拦住了；能走到这里的大多是第 2 种。
+      //
+      // 为什么必须分开：清会话是不可逆的（用户的票会被删掉、还要被推去登录），
+      // 可它**未必**是用户的错。所以先探一次学校那边，探到学校有问题就按
+      // "教务系统暂时打不开"报，绝不删票、也不发起登录。探测结果有 20 秒缓存
+      // （见 [JwAvailability]），用户连点刷新也不会拿学校服务器当压测对象。
+      if (await JwAvailability.schoolLooksDownNow()) {
+        throw schoolDown;
+      }
       throw sessionExpired;
     }
 

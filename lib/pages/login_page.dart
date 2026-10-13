@@ -154,6 +154,29 @@ class _LoginPageState extends State<LoginPage> {
       _webVisible = true;
       if (hint != null) _hint = hint;
     });
+    // 交出网页之前把账号密码补回去（原因见 [_refillForUser]）。放在这里是因为
+    // `_reveal` 是"决定交给用户"的唯一出口 —— 要验证码、密码错、超时兜底、
+    // 按钮认不出来，各条路最后都经过它。
+    _refillForUser();
+  }
+
+  /// 已经给用户补填过一次了（见 [_refillForUser]）
+  bool _refilledForUser = false;
+
+  /// 把账号密码重新写回网页，然后才把网页交给用户。
+  ///
+  /// 为什么需要：CAS 那边登录失败后是**重新渲染一份空表单**（POST 回来后页面整个
+  /// 重来一遍），App 之前填进去的值就不在了。原来的行为是直接把网页露出来 ——
+  /// 用户看到的是一个**空的**登录页，还得自己重新敲一遍账号密码，而他明明只是
+  /// 让 App 自动登。
+  ///
+  /// 只补一次：露出来之后用户可能已经在打字了，反复补填会把他刚敲的覆盖掉。
+  Future<void> _refillForUser() async {
+    if (_refilledForUser || !widget.auto) return;
+    final c = _controller;
+    if (c == null) return;
+    await _autoFill(c, fillOnly: true);
+    _refilledForUser = true;
   }
 
   /// 账号密码错：看网页也没用，直接带着原因退回自绘登录页，让用户重输。
@@ -247,10 +270,14 @@ class _LoginPageState extends State<LoginPage> {
   ///
   /// 填完当场回读校验，两格都有值才提交；否则不提交、稍后重试，
   /// 免得拿空密码反复提交把账号锁了。
-  Future<void> _autoFill(InAppWebViewController c) async {
-    if (_autoSubmitted || _autoBusy || _popped) return;
+  /// [fillOnly] 为 true 时只把账号密码写回页面、**不提交** —— 用在"决定把网页
+  /// 交给用户"的那一刻：CAS 登录失败后是重渲染一份空表单，App 之前填的值不在
+  /// 了，直接把网页露出来就是个空登录页（详见 [_refillForUser]）。
+  Future<void> _autoFill(InAppWebViewController c, {bool fillOnly = false}) async {
+    // fillOnly 要能绕过 `_autoSubmitted`：补填恰恰发生在"已经提交过"之后
+    if (_popped || _autoBusy || (_autoSubmitted && !fillOnly)) return;
     // 重试到头仍没填进去：把网页露出来让用户自己输，别让他对着加载框干等
-    if (_autoTries > 8) {
+    if (!fillOnly && _autoTries > 8) {
       if (mounted && _phase == _Phase.login && _pageError == null) {
         debugPrint('自动填写没生效，输入框状态: $_fillState');
         setState(() => _pageError = '自动填写没生效，'
@@ -260,12 +287,13 @@ class _LoginPageState extends State<LoginPage> {
       return;
     }
     _autoBusy = true;
-    _autoTries++;
+    if (!fillOnly) _autoTries++;
     try {
       final user = jsonEncode(widget.autoUsername);
       final pass = jsonEncode(widget.autoPassword);
       final raw = (await c.evaluateJavascript(source: '''
         (function () {
+          var fillOnly = $fillOnly;
           function isVisible(el) {
             if (!el || el.disabled) return false;
             var r = el.getBoundingClientRect();
@@ -395,36 +423,51 @@ class _LoginPageState extends State<LoginPage> {
             state = '账号' + (u.value ? u.value.length : 0)
                   + '/密码' + (pv.value ? pv.value.length : 0)
                   + '/密文' + (enc ? (enc.value ? enc.value.length : 0) : -1);
-            // 提交前先看页面上有没有验证码。
-            // 这个登录页是"点了提交才有反应"的老式表单 —— 错误提示、要不要
-            // 验证码，都得 POST 一次才知道。但验证码控件本身是**提交前**就
-            // 摆在页面上的，所以能提前看见：有就别提交了，那次必然不过，
-            // 还白搭一次尝试、把账号继续往"需要验证码"的状态里推。
-            // 账号密码照样填好，用户只要补个验证码再点登录。
+            // 只补填、不提交（见 _refillForUser）
+            if (fillOnly) {
+              return JSON.stringify({ status: 'FILLED', state: state,
+                                      dump: dump.join(' | ') });
+            }
+            // 提交前先看这个账号要不要验证码。
+            // 页面自己那个全局 `needCaptcha` 才是权威答案 —— 它是页面拿
+            // `needCaptcha.html` 问出来的（见 mobile-login_v1.0.js 里的
+            // showCaptcha/hideCaptcha）。所以**优先采信它**。
+            //
+            // 为什么不能只看"验证码那一行露没露"：App 自己填表时会先 focus 用户名、
+            // 再 focus 密码，这恰好触发页面的 `mobileUsername.onblur` → 它去问
+            // needCaptcha.html（**异步**）→ 于是那一行是**被我们自己引出来的**。
+            // 抢在那个 AJAX 回来之前按"看得见就算要"下结论，就会把一次本来能成功
+            // 的登录判死，用户看到的是"明明不需要验证码却说要验证码"。
+            //（那一行默认是 display:none，所以可见性判断本身仍是必要的兜底。）
+            //
+            // 这个登录页是"点了提交才有反应"的老式表单 —— 错误提示得 POST 一次
+            // 才知道；所以下面这个判断只是为了**别白搭一次注定不过的提交**。
             var capRe = /captcha|validate|checkcode|verifycode|kaptcha|randomcode/i;
-            var needCaptcha = false;
+            var capSeen = false;
             var ci;
             var capImgs = document.querySelectorAll('img');
             for (ci = 0; ci < capImgs.length; ci++) {
               var csrc = capImgs[ci].getAttribute('src') || '';
               if (capRe.test(csrc) && isVisible(capImgs[ci])) {
-                needCaptcha = true; break;
+                capSeen = true; break;
               }
             }
-            if (!needCaptcha) {
+            if (!capSeen) {
               var capIns = document.querySelectorAll('input');
               for (ci = 0; ci < capIns.length; ci++) {
                 var cid = (capIns[ci].id || '') + ' '
                         + (capIns[ci].getAttribute('name') || '');
                 if (capRe.test(cid) && isVisible(capIns[ci])) {
-                  needCaptcha = true; break;
+                  capSeen = true; break;
                 }
               }
             }
+            var pageSays = (typeof needCaptcha === 'boolean') ? needCaptcha : null;
+            var capNeeded = (pageSays !== null) ? pageSays : capSeen;
 
             if (!okP || !u.value || !pv.value) {
               st = 'PWDFAIL';
-            } else if (needCaptcha) {
+            } else if (capNeeded) {
               st = 'CAPTCHA';
             } else {
               var btn = document.querySelector('#loginButton')
@@ -448,6 +491,11 @@ class _LoginPageState extends State<LoginPage> {
         res = const <String, dynamic>{};
       }
       final status = (res['status'] ?? '').toString();
+      if (status == 'FILLED') {
+        // 只补填的那一次：不提交、不改界面状态，日志里留个读数就够了
+        debugPrint('补填账号密码: ${res['state']}');
+        return;
+      }
       // 输入框结构只有排错时有用：挂到日志上就够了。原来这里把 `_domDump`
       // 存下来，在界面上挂一个写着「排错用」的折叠面板 —— 那是开发视角的东西，
       // 用户不需要看，也不知道该怎么用。要查的时候接一下 logcat 就能拿到。
@@ -548,18 +596,35 @@ class _LoginPageState extends State<LoginPage> {
             }
           }
 
-          // 3) 验证码：它是在密码错很多次之后才出现的，出现了就必须人来做
+          // 3) 验证码：它是在密码错很多次之后才出现的，出现了就必须人来做。
+          //
+          // ⚠ 必须连"真的看得见"一起判。CAS 登录页**永远**带着
+          //   `<img id="captchaImg" src="captcha.html">` 和
+          //   `<input id="captchaResponse">`，它们包在 `#cpatchaDiv`
+          //   （style="display:none"）里。只匹配 src/id 的话，**不管页面回什么
+          //   都会判成需要验证码** —— 真正的失败原因（比如密码错）被它盖掉，
+          //   用户看到的就是"密码明明错了，却说你得填验证码"，而且每次都是。
+          function capVisible(el) {
+            if (!el) return false;
+            var r = el.getBoundingClientRect();
+            if (!r || r.width <= 0 || r.height <= 0) return false;
+            var s = window.getComputedStyle(el);
+            if (!s || s.display === 'none' || s.visibility === 'hidden') return false;
+            return true;
+          }
           var re = /captcha|validate|checkcode|verifycode|kaptcha|randomcode/i;
           var cap = false;
           var imgs = document.querySelectorAll('img');
           for (var i = 0; i < imgs.length; i++) {
-            if (re.test(imgs[i].getAttribute('src') || '')) { cap = true; break; }
+            if (re.test(imgs[i].getAttribute('src') || '') && capVisible(imgs[i])) {
+              cap = true; break;
+            }
           }
           if (!cap) {
             var ins = document.querySelectorAll('input');
             for (var i = 0; i < ins.length; i++) {
               var idn = (ins[i].id || '') + ' ' + (ins[i].getAttribute('name') || '');
-              if (re.test(idn)) { cap = true; break; }
+              if (re.test(idn) && capVisible(ins[i])) { cap = true; break; }
             }
           }
           // innerText 不含 display:none 的内容，所以页面上"藏着不用"的验证码

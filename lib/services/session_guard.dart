@@ -14,6 +14,17 @@ class SessionGuard {
   static const List<String> _loginPageMarkers = [
     'casLoginForm',
     'pwdDefaultEncryptSalt',
+    // 强智（教务本体 jw.gdgm.cn）自己的登录页。**会话失效时它不一定跳转** ——
+    // 实测未登录去请求 xskb_list.do / xsMain.jsp，回的是 HTTP **200**、标题「登录」、
+    // 正文里有这句「请先登录系统」，并用 JS `window.location.href="/sso.jsp"` 自己跳。
+    // 上面那两个 CAS 特征一个都不命中，于是只能靠"课表锚点一个都没有"兜底 ——
+    // 而那条兜底分不清"掉登录"和"教务自己返回了别的页面"（刚重启、维护时段、
+    // 502 之后的兜底页都长一个样）。
+    //
+    // 为什么只收这一句、不收 `/sso.jsp`：见类注释里那条教训 —— 正常业务页面里
+    // 也会带着"会话超时后跳 login.jsp"这种脚本片段，路径类的串不能当判据。
+    // 「请先登录系统」是登录页上给人看的文案，业务页面不会出现。
+    '请先登录系统',
   ];
 
   /// 正文里是否出现 [markers] 里的任意一个。

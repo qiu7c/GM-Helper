@@ -44,6 +44,32 @@ void main() {
       expect(SessionGuard.looksLoggedOut(200, '<div>用户登录</div>'), isFalse);
     });
 
+    test('200 且正文是强智自己的登录页 -> 失效（照实测页面抄的）', () {
+      // 这一段是按**真页面**抄的（2026-10 实测：未登录请求课表接口，回的就是它）。
+      // 它正是原来判不出来的原因：
+      //   * HTTP 200 —— 不跳转；
+      //   * 正文里**没有** CAS 表单 / 加密盐（那是 sfrz 那边的登录页特征）；
+      //   * 靠 JS 自己跳 /sso.jsp。
+      // 于是只能落到"课表锚点一个都没有"那条兜底，而那条分不清掉登录和教务抽风。
+      const realPage = '''
+        <html><head><title>登录</title></head><body>
+        <div class="login-box"><h3>用户登录</h3>
+        <p>请先登录系统</p>
+        <script>window.location.href="/sso.jsp"</script>
+        </div></body></html>
+      ''';
+      expect(SessionGuard.looksLoggedOut(200, realPage), isTrue);
+    });
+
+    test('业务页里"会话超时后跳 /sso.jsp"的脚本不算失效', () {
+      // 反面，也是**故意**不收 /sso.jsp 当标记的原因：路径类子串不能当判据
+      //（类注释里 login.jsp 那条就是踩过这个坑）。标记只收「请先登录系统」
+      // 这种登录页上写给人看的文案。
+      const business =
+          '<div>课表</div><script>window.location.href="/sso.jsp"</script>';
+      expect(SessionGuard.looksLoggedOut(200, business), isFalse);
+    });
+
     test('状态码为 null -> false（宁可放过也不误清登录态）', () {
       expect(SessionGuard.looksLoggedOut(null, 'casLoginForm'), isFalse);
     });
