@@ -202,6 +202,7 @@ class ScheduleService {
       selectedWeek: _selectedValue(doc, '#zc'),
       selectedCampus: _selectedValue(doc, '#kbjcmsid'),
       remark: remark,
+      tableFound: table != null,
     );
   }
 

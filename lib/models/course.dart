@@ -100,6 +100,13 @@ class ScheduleResult {
   final String? selectedCampus;
   final String remark; // 备注，如"军事技能 1-15周;"
 
+  /// 这次响应里**有没有课表本体**（`#kbtable`）。
+  ///
+  /// 用来区分两种"零门课"：一种是真的没课（军训周、开学前几周、期末考完），
+  /// 另一种是页面结构变了、解析不出课表。前者是准确数据，必须原样缓存；
+  /// 后者绝不能拿去覆盖用户的课表。见 `ScheduleCache.write`。
+  final bool tableFound;
+
   const ScheduleResult({
     required this.courses,
     this.terms = const [],
@@ -109,6 +116,7 @@ class ScheduleResult {
     this.selectedWeek,
     this.selectedCampus,
     this.remark = '',
+    this.tableFound = true,
   });
 }
 

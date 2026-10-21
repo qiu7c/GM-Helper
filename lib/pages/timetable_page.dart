@@ -270,7 +270,45 @@ class _TimetablePageState extends State<TimetablePage> {
         if (cal != null) {
           await SchedulePrefs.instance.applyCalendar(cal);
           _calendarLoaded = true;
-          if (!keepSelection) _week = cal.currentWeek;
+          if (!keepSelection) {
+            final readWeek = _week;
+            _week = cal.currentWeek;
+            // 「当前周」被教务纠正过来了。本地那个数是用「学期第一周周一 + 今天」
+            // 推出来的，设备日期差一两天就会差出一整周，而教务桌面页的「第X周」
+            // 才是准的。
+            //
+            // 周次一变，缓存键就变了：上面铺的那份属于**纠正前**那一周，而接下来
+            // 写缓存、比课表都用纠正后的周次 —— 于是"读的键"和"写的键"永远是两个
+            // 周，那份旧缓存再也不会被覆盖。用户看到的就是"第一眼还是旧课表、
+            // 缓存时间停在好几天前、还老是说课表有变动"。
+            //
+            // 所以这里按纠正后的周次重读一次：有就换成它（这才是这一周该显示的），
+            // 没有就保持原样，交给下面这次刷新填。
+            if (_week != readWeek) {
+              final again = await ScheduleCache.read(
+                user: user,
+                term: wantTerm,
+                campus: wantCampus,
+                week: _week.toString(),
+              );
+              if (again != null) {
+                final at2 = await ScheduleCache.cachedAt(
+                  user: user,
+                  term: wantTerm,
+                  campus: wantCampus,
+                  week: _week.toString(),
+                );
+                if (!mounted || seq != _loadSeq) return;
+                setState(() {
+                  _result = again;
+                  _resultWeek = _week;
+                  _fromCache = true;
+                  _cacheTime = at2;
+                  _staleReason = null;
+                });
+              }
+            }
+          }
         }
       }
 
@@ -286,6 +324,8 @@ class _TimetablePageState extends State<TimetablePage> {
       // 屏幕上的那份就是这次的比对基线：铺过缓存时它是缓存，否则是上一次的结果。
       // 第一次打开 App（_result == null）没有基线，下面不比较、也不提示。
       final before = _result;
+      // 基线属于哪一周（缓存/上次结果被写进去时的周次）。比对前要和这次请求的周次对齐。
+      final beforeWeek = _resultWeek;
       // 学期/校区以**这次读缓存用的那份**（wantTerm/wantCampus）为回落基准。
       //
       // 原来回落的是 `_term`，而 `_term` 可能刚被上面读缓存那一步改成了
@@ -339,7 +379,13 @@ class _TimetablePageState extends State<TimetablePage> {
       // 就是"切周弹、重进还弹，一直反复弹窗"。
       //
       // 判据在 `ScheduleDiff.comparable`：两边周次都有、且相等才比，拿不准就不比。
-      if (ScheduleDiff.comparable(before, result)) {
+      //
+      // 但只靠它不够：`selectedWeek` 是**页面自己回显**的，不保证跟着我们请求的
+      // `zc` 走（页面用 JS 设选中项时它甚至可能为空）。真正决定"能不能比"的是
+      // 这份数据**是按哪个周次取回来的** —— 也就是 `beforeWeek` 和 `fetchWeek`。
+      // 两者不同，说明基线属于别的周，比出来的"新增/取消"全是假的，那正是
+      // 「一直反复弹窗、怎么点都还在弹」的来源。
+      if (beforeWeek == fetchWeek && ScheduleDiff.comparable(before, result)) {
         final diff = ScheduleDiff.compare(before!.courses, result.courses);
         if (!diff.isEmpty && mounted) _announceDiff(diff);
       }

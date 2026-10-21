@@ -1,7 +1,7 @@
 name: gdgm_schedule
 description: GMPluse - 广东工贸职业技术学院校园助手 (Android/iOS)
 publish_to: 'none'
-version: 2.2.6+18
+version: 2.2.7+19
 
 environment:
   sdk: '>=3.5.0 <4.0.0'

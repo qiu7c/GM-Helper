@@ -68,10 +68,12 @@ class ScheduleCache {
     }
   }
 
-  /// 读缓存。没有、坏了、或者是个空课表都返回 null。
+  /// 读缓存。没有、或者坏了返回 null。
   ///
-  /// 空课表特意当作"没有缓存"：宁可转圈，也别拿一份空表把用户的课表抹掉。
-  /// （注意这里**没有过期判定**，理由见 `_maxEntries` 上面那段。）
+  /// **空课表不再是"没有缓存"**：军训周、开学前几周、期末考完那几周，教务返回的
+  /// 就是零门课，那是准确数据。以前这里把它当"没有缓存"丢掉，连带把那几周的缓存
+  /// 永远留在上一份非空数据上 —— 用户每次打开都先看到旧课表，还每次都弹"课表有变化"。
+  /// 现在只有**页面里根本没有课表**（解析失败）才当作没有缓存。
   static Future<ScheduleResult?> read({
     String? user,
     String? term,
@@ -87,7 +89,9 @@ class ScheduleCache {
           .whereType<Map>()
           .map((c) => Course.fromJson(c.cast<String, dynamic>()))
           .toList();
-      if (courses.isEmpty) return null;
+      // 老版本没存这个键：那时能写进去的一定非空，按 true 处理即可
+      final tableFound = e['tableFound'] != false;
+      if (courses.isEmpty && !tableFound) return null;
       return ScheduleResult(
         courses: courses,
         terms: _opts(e['terms']),
@@ -97,6 +101,7 @@ class ScheduleCache {
         selectedWeek: e['selectedWeek']?.toString(),
         selectedCampus: e['selectedCampus']?.toString(),
         remark: (e['remark'] ?? '').toString(),
+        tableFound: tableFound,
       );
     } catch (_) {
       return null;
@@ -128,8 +133,13 @@ class ScheduleCache {
     required String? week,
     required ScheduleResult result,
   }) async {
-    // 空课表不写：否则一次异常的响应就把好数据覆盖掉了
-    if (result.courses.isEmpty) return;
+    // 只有"页面里根本没有课表"（解析失败）才不写 —— 那种情况下零门课是假的，
+    // 写进去等于用一次异常响应把好数据覆盖掉。
+    //
+    // 但**真没课**（军训周、开学前、期末考完）必须写：那是准确数据。以前这里一律
+    // 不写，于是那几周的缓存永远停在上一份非空数据上 —— 每次打开先看到旧课表、
+    // 每次刷新还拿它当基线比，报出一堆假的"取消 N 门"。
+    if (result.courses.isEmpty && !result.tableFound) return;
     final all = await _readAll();
     final k = _keyOf(user, term, campus, week);
     all.remove(k); // 先删再插，让它排到最新
@@ -143,6 +153,8 @@ class ScheduleCache {
       'selectedWeek': result.selectedWeek,
       'selectedCampus': result.selectedCampus,
       'remark': result.remark,
+      // 空课表要能被读回来，就得记住这个"零门课是真的"标记（见 read）
+      'tableFound': result.tableFound,
     };
     // Map 保持插入顺序，keys.first 就是最旧的那份
     while (all.length > _maxEntries) {

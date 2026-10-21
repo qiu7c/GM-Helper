@@ -73,31 +73,52 @@ void main() {
       expect(got.courses.first.weeks, [1, 2, 3]);
     });
 
-    test('空课表不写：一次异常响应不能把好数据覆盖掉', () async {
+    test('页面里根本没有课表的空表不写：一次异常响应不能把好数据覆盖掉', () async {
       await ScheduleCache.write(
         user: 'u1',
         term: 't1',
         campus: 'c1', week: '1',
         result: _result(names: ['数据库']),
       );
+      // tableFound: false = 响应里连 #kbtable 都没有，零门课是假的（解析失败）
       await ScheduleCache.write(
         user: 'u1',
         term: 't1',
         campus: 'c1', week: '1',
-        result: const ScheduleResult(courses: []), // 空表
+        result: const ScheduleResult(courses: [], tableFound: false),
       );
 
       final got = await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1', week: '1');
-      expect(got, isNotNull, reason: '空表不该把已有缓存清掉');
+      expect(got, isNotNull, reason: '解析失败的空表不该把已有缓存清掉');
       expect(got!.courses.map((c) => c.name).toList(), ['数据库']);
     });
 
-    test('空课表本身也读不出缓存（宁可转圈也别显示空表）', () async {
+    test('真没课的那一周（军训）要写进缓存，而且能读回来', () async {
+      await ScheduleCache.write(
+        user: 'u1',
+        term: 't1',
+        campus: 'c1', week: '1',
+        result: _result(names: ['数据库']),
+      );
+      // tableFound 默认 true = 页面有课表，只是这一周没有课 —— 这是准确数据
       await ScheduleCache.write(
         user: 'u1',
         term: 't1',
         campus: 'c1', week: '1',
         result: const ScheduleResult(courses: []),
+      );
+
+      final got = await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1', week: '1');
+      expect(got, isNotNull, reason: '真没课的缓存必须覆盖掉上一份非空数据，否则下次打开又是旧课表');
+      expect(got!.courses, isEmpty);
+      expect(got.tableFound, isTrue);
+    });
+
+    test('解析失败留下的空条目读不出来（宁可转圈也别显示"这周没课"）', () async {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString(
+        _cacheKey,
+        '{"u1|t1|c1|1": {"at": "2026-10-21T00:00:00.000", "courses": [], "tableFound": false}}',
       );
       expect(await ScheduleCache.read(user: 'u1', term: 't1', campus: 'c1', week: '1'), isNull);
     });
