@@ -286,19 +286,48 @@ class _TimetablePageState extends State<TimetablePage> {
       // 屏幕上的那份就是这次的比对基线：铺过缓存时它是缓存，否则是上一次的结果。
       // 第一次打开 App（_result == null）没有基线，下面不比较、也不提示。
       final before = _result;
+      // 学期/校区以**这次读缓存用的那份**（wantTerm/wantCampus）为回落基准。
+      //
+      // 原来回落的是 `_term`，而 `_term` 可能刚被上面读缓存那一步改成了
+      // 「缓存里存的 selectedTerm」—— 那是很久以前那次写进去的值，未必等于
+      // 我们这次读用的键。于是一旦服务端回显为空（页面用 JS 设选中项时
+      // `_selectedValue` 读不到，很常见），缓存就会写到**另一个键**上：
+      // 读的键永远读不到新数据，用户看到的就是"一直是旧课表、缓存时间不前进"。
+      final effTerm = result.selectedTerm ?? wantTerm;
+      final effCampus = result.selectedCampus ?? wantCampus;
       setState(() {
         _result = result;
         _resultWeek = fetchWeek;
-        _term = result.selectedTerm ?? _term;
-        _campus = result.selectedCampus ?? _campus;
+        _term = effTerm;
+        _campus = effCampus;
         _loading = false;
         _error = null;
         _fromCache = false;
         _cacheTime = null; // 拿到新的了，之前那份缓存的时间戳作废
         _staleReason = null;
       });
-      await ScheduleCache.write(user: user, term: _term, campus: _campus,
-          week: fetchWeek.toString(), result: result);
+      final fetchWeekStr = fetchWeek.toString();
+      await ScheduleCache.write(user: user, term: effTerm, campus: effCampus,
+          week: fetchWeekStr, result: result);
+      // ★ 再把**这次读缓存用的那个键**也覆盖一遍。
+      //
+      // 老版本有可能把缓存写到别的键上（比如写的时候用的是"服务端回显的学期"、
+      // 读的时候用的是本地偏好里那份），后果是：读的那个键**永远没人写**，
+      // 于是每次打开都只能看到很久以前那一份 —— 用户看到的是"一直是旧课表、
+      // 缓存时间不前进、还老是说课表有变动"（拿旧表当基线比新数据，必然比出差异）。
+      // 那种状态下光把写改对也不够：旧键上的那份还在，下一次读仍然是它。
+      //
+      // 所以刷新成功之后，把"刚读过的那个键"一起刷成新数据。周次一致时这是安全
+      // 的（这份数据本来就属于这个键），代价只是多写一次 prefs；而它保证了一件事：
+      // **只要刷新成功过一次，卡住的那份旧缓存就会被顶掉**，不用等下一轮。
+      if (fetchWeekStr == wantWeek) {
+        await ScheduleCache.write(
+            user: user,
+            term: wantTerm,
+            campus: wantCampus,
+            week: wantWeek,
+            result: result);
+      }
       if (_term != null) await AuthStore.saveLastTerm(_term!);
       if (_campus != null) await AuthStore.saveLastCampus(_campus!);
       SchedulePrefs.instance.sync(term: _term, campus: _campus);
