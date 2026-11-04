@@ -1,0 +1,165 @@
+{
+  "courses": [
+    {
+      "name": "星图设计基础",
+      "teacher": "林老师",
+      "room": "虚构楼101",
+      "teachingClass": "虚构教学班A",
+      "rawWeeks": "1-16(单周)[01-02节]",
+      "weeks": [
+        1,
+        3,
+        5,
+        7,
+        9,
+        11,
+        13,
+        15
+      ],
+      "day": 1,
+      "period": 1,
+      "sectionRange": "01-02节"
+    },
+    {
+      "name": "创意编程导论",
+      "teacher": "周老师",
+      "room": "虚构楼202",
+      "teachingClass": "虚构教学班B",
+      "rawWeeks": "2-16(双周)[03-04节]",
+      "weeks": [
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14,
+        16
+      ],
+      "day": 1,
+      "period": 1,
+      "sectionRange": "03-04节"
+    },
+    {
+      "name": "数字叙事工作坊",
+      "teacher": "陈老师",
+      "room": "虚构楼303",
+      "teachingClass": "虚构教学班C",
+      "rawWeeks": "1-16(周)[03-04节]",
+      "weeks": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "day": 3,
+      "period": 2,
+      "sectionRange": "03-04节"
+    },
+    {
+      "name": "交互原型实践",
+      "teacher": "许老师",
+      "room": "虚构楼404",
+      "teachingClass": "虚构教学班D",
+      "rawWeeks": "5-12(周)[05-06节]",
+      "weeks": [
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "day": 5,
+      "period": 3,
+      "sectionRange": "05-06节"
+    },
+    {
+      "name": "数据可视化概论",
+      "teacher": "吴老师",
+      "room": "虚构楼505",
+      "teachingClass": "虚构教学班E",
+      "rawWeeks": "3-15(单周)[07-08节]",
+      "weeks": [
+        3,
+        5,
+        7,
+        9,
+        11,
+        13,
+        15
+      ],
+      "day": 2,
+      "period": 4,
+      "sectionRange": "07-08节"
+    },
+    {
+      "name": "媒体素养专题",
+      "teacher": "郑老师",
+      "room": "虚构楼606",
+      "teachingClass": "虚构教学班F",
+      "rawWeeks": "4-16(双周)[09-10节]",
+      "weeks": [
+        4,
+        6,
+        8,
+        10,
+        12,
+        14,
+        16
+      ],
+      "day": 6,
+      "period": 5,
+      "sectionRange": "09-10节"
+    }
+  ],
+  "remark": "虚构备注：第7周按教学安排上课。",
+  "tableFound": true,
+  "terms": [
+    {
+      "value": "2026-2027-1",
+      "label": "2026-2027学年第一学期"
+    },
+    {
+      "value": "2025-2026-2",
+      "label": "2025-2026学年第二学期"
+    }
+  ],
+  "selectedTerm": "2026-2027-1",
+  "weeks": [
+    {
+      "value": "7",
+      "label": "第7周"
+    },
+    {
+      "value": "8",
+      "label": "第8周"
+    }
+  ],
+  "selectedWeek": "7",
+  "campuses": [
+    {
+      "value": "3589FB3E8AD246BCBAD7BB5C8710D078",
+      "label": "天河校区"
+    },
+    {
+      "value": "0A10E5C18E814AEAA9456E91A7092394",
+      "label": "荔湾校区"
+    }
+  ],
+  "selectedCampus": "3589FB3E8AD246BCBAD7BB5C8710D078"
+}

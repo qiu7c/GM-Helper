@@ -1,0 +1,79 @@
+name: Native Android and iOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [native/rewrite]
+    paths: ["native/**", ".github/workflows/native.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: native/android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Build and test native Android
+        run: sh gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug assembleRelease
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: GMPluse-native-android
+          path: |
+            native/android/app/build/outputs/apk/debug/*.apk
+            native/android/app/build/outputs/apk/release/*.apk
+            native/android/app/build/reports/tests/
+            native/android/app/build/reports/lint-results-debug.html
+          retention-days: 7
+
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Xcode and project structure
+        run: |
+          xcodebuild -version
+          python3 native/ios/verify_structure.py
+          xcodebuild -resolvePackageDependencies -project native/ios/GMSchedule.xcodeproj -scheme GMSchedule
+      - name: Build unsigned iOS application
+        run: |
+          xcodebuild -project native/ios/GMSchedule.xcodeproj -scheme GMSchedule \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/gm-ios-release" CODE_SIGNING_ALLOWED=NO build
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p "$RUNNER_TEMP/gm-ipa/Payload" dist
+          ditto "$RUNNER_TEMP/gm-ios-release/Build/Products/Release-iphoneos/GMSchedule.app" "$RUNNER_TEMP/gm-ipa/Payload/GMSchedule.app"
+          cd "$RUNNER_TEMP/gm-ipa"
+          zip -qry "$GITHUB_WORKSPACE/dist/GMPluse-native-unsigned.ipa" Payload
+      - name: Run iOS unit tests
+        run: |
+          DEVICE=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for values in d["devices"].values() for v in values if v["name"].startswith("iPhone")))')
+          xcodebuild -project native/ios/GMSchedule.xcodeproj -scheme GMSchedule \
+            -destination "platform=iOS Simulator,id=$DEVICE" \
+            -derivedDataPath "$RUNNER_TEMP/gm-ios-tests" \
+            -resultBundlePath "$RUNNER_TEMP/gm-ios-tests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: GMPluse-native-ios
+          path: |
+            dist/*.ipa
+            ${{ runner.temp }}/gm-ios-tests.xcresult
+          retention-days: 7

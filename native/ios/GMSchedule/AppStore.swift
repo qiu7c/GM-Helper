@@ -1,0 +1,197 @@
+import SwiftUI
+import UserNotifications
+import WebKit
+
+@MainActor final class AppStore: ObservableObject {
+    @Published var preferences: Preferences
+    @Published var schedule: Schedule?
+    @Published var profile: [ProfileField] = []
+    @Published var status = "登录后即可同步学校课表"
+    @Published var busy = false
+    @Published var showLogin = false
+    var freshLogin = false
+    @Published var logs: [String] = []
+    @Published var background: UIImage?
+    @Published var update: UpdateInfo?
+    @Published var change: String?
+    let disk: LocalStore
+    let client = SchoolClient()
+    private var triedAutoLogin = false
+    private var explicitlyLoggedOut = false
+    private var started = false
+    init(disk: LocalStore = LocalStore()) {
+        self.disk = disk
+        preferences = disk.preferences()
+        background = disk.background.flatMap(UIImage.init(data:))
+    }
+    var scope: Scope { Scope(account: preferences.account, term: preferences.term, campus: preferences.campus, week: preferences.week) }
+    var calendar: TermCalendar? { preferences.calendarTerm == preferences.term ? preferences.calendar : nil }
+    var totalWeeks: Int { calendar?.total ?? max(schedule?.weeks.compactMap { Int($0.value) }.max() ?? 20, preferences.week) }
+    var automaticLogin: Bool { preferences.autoLogin && !explicitlyLoggedOut && Keychain.read("password." + preferences.account) != nil }
+    var savedPassword: String { Keychain.read("password." + preferences.account).flatMap { String(data: $0, encoding: .utf8) } ?? "" }
+    var colorScheme: ColorScheme? { preferences.theme == 1 ? .light : preferences.theme == 2 ? .dark : nil }
+    func log(_ message: String) {
+        let formatter = DateFormatter(); formatter.dateFormat = "HH:mm:ss"
+        logs.append(formatter.string(from: Date()) + " " + message)
+        logs = Array(logs.suffix(100))
+    }
+    func persist() {
+        do { try disk.save(preferences) } catch { status = "无法保存设置"; log("本地设置写入失败") }
+    }
+    func start() async {
+        guard !started else { return }; started = true
+        do {
+            try disk.importLegacyCache()
+            try client.restoreCookies()
+        } catch { log("旧数据或凭据读取失败；可重新登录") }
+        if let calendar = calendar { preferences.week = min(max(calendar.week(on: Date()), 1), calendar.total) }
+        restoreCache()
+        if !preferences.account.isEmpty { await refresh() }
+        if schedule == nil { attemptAutoLogin() }
+        do {
+            let info = try await UpdateInfo.fetch()
+            if info.newer && UserDefaults.standard.string(forKey: "native.announced") != info.version {
+                update = info
+                UserDefaults.standard.set(info.version, forKey: "native.announced")
+            }
+        } catch { log("启动更新检查未完成") }
+    }
+    func attemptAutoLogin() {
+        if automaticLogin && !triedAutoLogin { triedAutoLogin = true; freshLogin = false; showLogin = true }
+    }
+    func openLogin() { freshLogin = true; showLogin = true }
+    func restoreCache() {
+        schedule = disk.entry(scope)?.schedule
+        if schedule == nil && preferences.term.isEmpty, let entry = disk.latest(account: preferences.account) {
+            schedule = entry.schedule
+            preferences.term = entry.scope.term
+            preferences.week = entry.scope.week
+            preferences.campus = entry.scope.campus
+        }
+        if let schedule = schedule { status = "已显示缓存 · " + schedule.fetchedAt.formatted(date: .abbreviated, time: .shortened) }
+    }
+    func select(week: Int? = nil, term: String? = nil, campus: Campus? = nil) async {
+        if let week = week { preferences.week = week }
+        if let term = term { preferences.term = term }
+        if let campus = campus { preferences.campus = campus }
+        persist(); restoreCache()
+        await rebuildReminders()
+        await refresh()
+    }
+    func refresh() async {
+        guard !busy, !preferences.account.isEmpty else { return }
+        busy = true
+        defer { busy = false }
+        status = schedule == nil ? "正在获取课表…" : "已显示缓存，正在更新…"
+        let requested = scope
+        do {
+            let result = try await client.schedule(term: requested.term, campus: requested.campus, week: requested.week)
+            guard (requested.term.isEmpty || result.term == requested.term), result.week == requested.week, result.campus == requested.campus else {
+                throw SchoolError.message("学校返回了不同的查询范围，未覆盖课表，请重新选择。")
+            }
+            let received = Scope(account: requested.account, term: result.term, campus: result.campus, week: result.week)
+            let entry = CachedSchedule(scope: received, schedule: result)
+            if let diff = ChangeSummary.compare(disk.entry(received), entry), diff.added + diff.removed > 0 {
+                change = "本周课表有变化：新增 \(diff.added) 门，移除或调整 \(diff.removed) 门。"
+            }
+            try disk.put(entry)
+            schedule = result
+            preferences.term = result.term
+            status = result.courses.isEmpty ? "本周没有课程 · 已更新" : "已从学校更新"
+            log("课表同步成功（第 \(result.week) 周，\(result.courses.count) 门）")
+            // Calendar is valid only for the currently active school term, never apply it to historical terms.
+            let desktop = try await client.desktop()
+            profile = desktop.1
+            if let cal = desktop.0, let currentTerm = result.terms.first?.value, result.term == currentTerm {
+                preferences.calendar = cal; preferences.calendarTerm = result.term
+            }
+            persist()
+            try client.persistCookies()
+            await rebuildReminders()
+        } catch {
+            report(error)
+            if case SchoolError.expired = error { attemptAutoLogin() }
+        }
+    }
+    func report(_ error: Error) {
+        if let error = error as? SchoolError { status = error.localizedDescription }
+        else if error is URLError { status = "网络连接未完成，请稍后重试；已保留缓存。" }
+        else { status = "本次操作未完成，请重试；已保留缓存。" }
+        log(status)
+    }
+    func completeLogin(cookies: [HTTPCookie], username: String, password: String, save: Bool, auto: Bool) async throws {
+        try client.clearCookies()
+        try client.accept(cookies)
+        try await client.verify()
+        let desktop = try await client.desktop()
+        let studentID = desktop.1.first { ["学生编号", "学号"].contains($0.label) }?.value ?? ""
+        guard !studentID.isEmpty else { throw SchoolError.message("登录页面已打开，但还未获取到学号，请继续完成教务授权。") }
+        // Scope data to the authenticated student, including enterprise-WeChat logins.
+        let previousAccount = preferences.account
+        preferences.account = studentID
+        if previousAccount != studentID { profile = []; schedule = nil; preferences.term = ""; preferences.calendar = nil }
+        preferences.savePassword = save && !password.isEmpty && username == studentID
+        preferences.autoLogin = auto && preferences.savePassword
+        try Keychain.write("password." + studentID, preferences.savePassword ? password.data(using: .utf8) : nil)
+        profile = desktop.1
+        explicitlyLoggedOut = false
+        persist(); showLogin = false
+        await refresh()
+    }
+    func logout() async {
+        explicitlyLoggedOut = true; triedAutoLogin = true
+        do { try client.clearCookies() } catch { report(error) }
+        disk.clearCache(); schedule = nil; profile = []; change = nil
+        preferences.reminders = false
+        persist()
+        await rebuildReminders()
+        status = "已退出，课表缓存和待发提醒已清除；本次不会自动登录。"
+        log("用户主动退出")
+    }
+    func note(_ course: Course) -> String { disk.note(account: preferences.account, course: course) }
+    func saveNote(_ course: Course, text: String) { disk.setNote(account: preferences.account, course: course, text: text); objectWillChange.send() }
+    func setBackground(_ image: UIImage?) {
+        do { try disk.saveBackground(image?.jpegData(compressionQuality: 0.85)); background = image }
+        catch { report(error) }
+    }
+    func toggleReminders(_ enabled: Bool) async {
+        do {
+            if enabled {
+                let allowed = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+                guard allowed else { throw SchoolError.message("通知权限未开启，可前往系统设置允许通知。") }
+            }
+            preferences.reminders = enabled; persist(); await rebuildReminders()
+        } catch { preferences.reminders = false; persist(); report(error) }
+    }
+    func rebuildReminders() async {
+        do {
+            let plan: [Reminder]
+            if preferences.reminders, let calendar = calendar {
+                plan = ReminderPlan.make(entries: disk.entries, account: preferences.account, term: preferences.term, campus: preferences.campus, firstMonday: calendar.firstMonday, minutes: preferences.reminderMinutes, now: Date())
+            } else { plan = [] }
+            try await Notifications.replace(plan)
+            if preferences.reminders { log("已安排 \(plan.count) 条本地提醒（仅已缓存课程）") }
+        } catch { report(error) }
+    }
+    func checkUpdate() async {
+        do { let info = try await UpdateInfo.fetch(); update = info; status = info.newer ? "发现新版本 \(info.version)" : "当前已是最新版本 3.0.0" }
+        catch { status = "更新检查失败，请稍后重试"; log(status) }
+    }
+    func courseStatus(now: Date) -> String {
+        guard let calendar = calendar else { return "校历尚未同步，刷新后显示当前与下节课程" }
+        let currentWeek = calendar.week(on: now)
+        let current = disk.entries.filter { $0.scope.account == preferences.account && $0.scope.term == preferences.term && $0.scope.campus == preferences.campus }
+        var next: (Date, Course)?
+        for entry in current where entry.scope.week >= currentWeek {
+            for course in entry.schedule.visibleCourses(week: entry.scope.week) where course.period <= preferences.campus.periods.count {
+                let period = preferences.campus.periods[course.period - 1]
+                let start = SchoolClock.date(firstMonday: calendar.firstMonday, week: entry.scope.week, day: course.day, minute: period.start)
+                let end = SchoolClock.date(firstMonday: calendar.firstMonday, week: entry.scope.week, day: course.day, minute: period.end)
+                if start <= now && now < end { return "正在上课 · \(course.name) · \(course.room)" }
+                if start > now && (next == nil || start < next!.0) { next = (start, course) }
+            }
+        }
+        if let next = next { return "下节 · \(next.1.name) · \(next.0.formatted(date: .abbreviated, time: .shortened)) · \(next.1.room)" }
+        return "已缓存课表中暂无接下来的课程"
+    }
+}
