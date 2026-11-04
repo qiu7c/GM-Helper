@@ -20,24 +20,24 @@ struct LoginView: View {
             ZStack {
                 AppBackground()
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 22) {
-                        HStack { BrandMark(size: 50); Spacer(); Text("GMPluse").font(.system(size: 17, weight: .bold, design: .rounded)).foregroundColor(Brand.ink) }
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("每一程，都从容。").font(.system(size: 30, weight: .bold, design: .rounded)).foregroundColor(Brand.ink)
-                            Text("欢迎来到广贸课表").font(.title3.weight(.medium))
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack { BrandMark(size: 42); Spacer(); Text("GMPluse").font(.system(size: 17, weight: .bold, design: .rounded)).foregroundColor(Brand.ink) }
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("每一程，都从容。").font(.system(size: 26, weight: .bold, design: .rounded)).foregroundColor(Brand.ink)
+                            Text("欢迎来到广贸课表").font(.system(size: 16, weight: .medium))
                             Text("连接校园，让今天的安排一目了然。")
-                                .font(.subheadline).foregroundColor(.secondary)
+                                .font(.system(size: 13)).foregroundColor(.secondary)
                         }.padding(.top, 2)
-                        VStack(alignment: .leading, spacing: 17) {
+                        VStack(alignment: .leading, spacing: 14) {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text("学校账号登录").font(.title3.bold())
                                 Text("使用学校统一认证账号与密码").font(.caption).foregroundColor(.secondary)
                             }
-                            VStack(spacing: 14) {
+                            VStack(spacing: 10) {
                                 HStack(spacing: 13) {
                                     Image(systemName: "person.crop.rectangle").foregroundColor(Brand.blue).frame(width: 24)
                                     TextField("学号", text: $username).textContentType(.username).keyboardType(.asciiCapable).autocapitalization(.none).disableAutocorrection(true)
-                                }.padding(16).background(Brand.field).cornerRadius(16)
+                                }.padding(14).background(Brand.field).cornerRadius(16)
                                 HStack(spacing: 13) {
                                     Image(systemName: "lock").foregroundColor(Brand.blue).frame(width: 24)
                                     Group {
@@ -45,7 +45,7 @@ struct LoginView: View {
                                         else { SecureField("密码", text: $password) }
                                     }.textContentType(.password).autocapitalization(.none).disableAutocorrection(true)
                                     Button { reveal.toggle() } label: { Image(systemName: reveal ? "eye.slash" : "eye").foregroundColor(.secondary) }.accessibilityLabel(reveal ? "隐藏密码" : "显示密码")
-                                }.padding(16).background(Brand.field).cornerRadius(16)
+                                }.padding(14).background(Brand.field).cornerRadius(16)
                             }
                             HStack {
                                 preference("保存密码", value: $save)
@@ -57,14 +57,14 @@ struct LoginView: View {
                                     if working { ProgressView().tint(.white) }
                                     Text(working ? "正在连接校园…" : "登录并查看课表").fontWeight(.semibold)
                                     if !working { Image(systemName: "arrow.right") }
-                                }.frame(maxWidth: .infinity).padding(.vertical, 17).foregroundColor(.white)
+                                }.frame(maxWidth: .infinity).padding(.vertical, 14).foregroundColor(.white)
                                     .background(Brand.gradient).cornerRadius(17)
                                     .shadow(color: Brand.blue.opacity(0.22), radius: 12, y: 6)
                             }.disabled(working || username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty || preview)
                             if !message.isEmpty {
                                 Label(message, systemImage: "exclamationmark.circle").font(.caption).foregroundColor(.orange).fixedSize(horizontal: false, vertical: true)
                             }
-                        }.padding(22).background(Brand.surface).cornerRadius(28)
+                        }.padding(18).background(Brand.surface).cornerRadius(28)
                             .overlay(RoundedRectangle(cornerRadius: 28).stroke(Color.white.opacity(0.3), lineWidth: 1))
                             .shadow(color: Brand.blue.opacity(0.06), radius: 24, y: 10)
                         VStack(spacing: 14) {
@@ -73,9 +73,9 @@ struct LoginView: View {
                                 Label("企业微信登录", systemImage: "qrcode.viewfinder").font(.subheadline.weight(.medium)).foregroundColor(Brand.blue)
                                     .padding(.vertical, 13).frame(maxWidth: .infinity).background(Brand.surface.opacity(0.75)).cornerRadius(15)
                             }.disabled(working || preview)
-                            Label("密码与会话安全保存在本机", systemImage: "lock.shield").font(.caption2).foregroundColor(.secondary)
+                            Label("登录信息仅用于学校认证", systemImage: "lock.shield").font(.caption2).foregroundColor(.secondary)
                         }.padding(.horizontal, 14)
-                    }.padding(.horizontal, 24).padding(.top, 12).padding(.bottom, 24).frame(maxWidth: 520).frame(maxWidth: .infinity)
+                    }.padding(.horizontal, 24).padding(.top, 6).padding(.bottom, 24).frame(maxWidth: 520).frame(maxWidth: .infinity)
                 }
             }
             .navigationBarTitleDisplayMode(.inline)

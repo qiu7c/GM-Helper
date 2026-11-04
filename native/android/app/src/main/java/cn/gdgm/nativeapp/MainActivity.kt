@@ -161,7 +161,7 @@ class MainActivity : Activity() {
                 root.addView(View(this).apply { setBackgroundColor(if (dark) 0x8820293b.toInt() else 0x55ffffff) }, FrameLayout.LayoutParams(-1, -1))
             }
         }
-        page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(12), dp(14), 0) }
+        page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(if (resources.configuration.screenWidthDp < 360) 9 else 14), dp(10), dp(if (resources.configuration.screenWidthDp < 360) 9 else 14), 0) }
         root.addView(page, FrameLayout.LayoutParams(-1, -1))
         setContentView(root)
         if (loginScreen) { renderLogin(); return }
@@ -183,15 +183,15 @@ class MainActivity : Activity() {
             addView(label("GMPluse  /  每周计划", 10f, true).apply { letterSpacing = .12f; setTextColor(if (dark) 0xff8fbac3.toInt() else 0xff739895.toInt()); setPadding(0, 0, 0, dp(5)) })
             addView(label("把今天安排好", 27f, true))
         }, LinearLayout.LayoutParams(0, -2, 1f))
-        title.addView(button("↗") { share() }.apply { textSize = 22f; contentDescription = "分享课表" }, LinearLayout.LayoutParams(dp(43), dp(43)))
-        title.addView(button("↻") { load() }.apply { textSize = 23f; contentDescription = "刷新课表" }, LinearLayout.LayoutParams(dp(43), dp(43)).apply { leftMargin = dp(7) })
+        title.addView(button("↗") { share() }.apply { textSize = 22f; setPadding(0, 0, 0, 0); setSingleLine(); contentDescription = "分享课表" }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        title.addView(button("刷新") { load() }.apply { textSize = 11f; setPadding(0, 0, 0, 0); setSingleLine(); contentDescription = "刷新课表" }, LinearLayout.LayoutParams(dp(40), dp(40)).apply { leftMargin = dp(6) })
         top.addView(title)
         val monday = store.firstMonday.plusWeeks((week - 1).toLong())
         top.addView(label("${monday.format(DateTimeFormatter.ofPattern("M月d日"))} — ${monday.plusDays(6).format(DateTimeFormatter.ofPattern("M月d日"))}  ▾", 12f).apply { alpha = .6f; setPadding(0, dp(10), 0, dp(17)); setOnClickListener { chooseDate() }; contentDescription = "按日期跳转周次" })
         val controls = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(5), dp(5), dp(5), dp(5)); background = GradientDrawable().apply { setColor(if (dark) 0xff21364b.toInt() else 0xffe8eeeb.toInt()); cornerRadius = dp(21).toFloat() } }
-        controls.addView(button("‹") { changeWeek(week - 1) }.apply { background = null; textSize = 23f }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        controls.addView(button("‹") { changeWeek(week - 1) }.apply { background = null; textSize = 23f; setPadding(0, 0, 0, 0); setSingleLine() }, LinearLayout.LayoutParams(dp(40), dp(40)))
         controls.addView(button("第 $week 周  ▾") { chooseWeek() }.apply { background = null; textSize = 16f; setTypeface(null, Typeface.BOLD) }, LinearLayout.LayoutParams(0, dp(40), 1f))
-        controls.addView(button("›") { changeWeek(week + 1) }.apply { background = null; textSize = 23f }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        controls.addView(button("›") { changeWeek(week + 1) }.apply { background = null; textSize = 23f; setPadding(0, 0, 0, 0); setSingleLine() }, LinearLayout.LayoutParams(dp(40), dp(40)))
         controls.addView(button("回本周") { changeWeek(store.currentWeek()) }.apply { textSize = 11f; setTextColor(if (dark) 0xffc8e3df.toInt() else 0xff467f7a.toInt()); background = GradientDrawable().apply { setColor(if (dark) 0xff345062.toInt() else Color.WHITE); cornerRadius = dp(16).toFloat() } }, LinearLayout.LayoutParams(dp(72), dp(36)).apply { leftMargin = dp(5) })
         top.addView(controls)
         val nowCard = LinearLayout(this).apply {
@@ -201,10 +201,10 @@ class MainActivity : Activity() {
         nowCard.addView(label("◷", 28f).apply { setTextColor(if (dark) 0xff9fc7c6.toInt() else 0xff578a8c.toInt()); gravity = Gravity.CENTER }, LinearLayout.LayoutParams(dp(37), dp(40)))
         status = label("", 12f, true).apply { setPadding(dp(11), 0, 0, 0); setLineSpacing(dp(4).toFloat(), 1f) }
         nowCard.addView(status, LinearLayout.LayoutParams(0, -2, 1f)); updateNow()
-        top.addView(nowCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(13) })
-        top.addView(label("●  $message", 10f).apply { alpha = .55f; setPadding(dp(3), dp(10), 0, 0); setOnClickListener { if (store.username.isBlank() || sessionExpired) credentials() else load() } })
+        top.addView(nowCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+        top.addView(label("●  $message", 10f).apply { alpha = .55f; setPadding(dp(3), dp(6), 0, 0); setOnClickListener { if (store.username.isBlank() || sessionExpired) credentials() else load() } })
         page.addView(top)
-        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false; setPadding(0, dp(10), 0, dp(8)) }
+        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false; setPadding(0, dp(2), 0, dp(8)) }
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         if (schedule == null) {
             body.addView(card().apply {
@@ -455,26 +455,27 @@ class MainActivity : Activity() {
         loginFormRemember = rememberDefault; loginFormAuto = autoDefault; loginError = ""; loginScreen = true; render()
     }
     private fun renderLogin() {
+        val compact = resources.configuration.screenHeightDp < 760
         val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
-        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(10), dp(4), dp(10), dp(24)) }
-        content.addView(button("‹  返回") { if (busy) toast("正在登录，请稍候") else { loginScreen = false; loginFormPassword = ""; render() } }.apply { background = null; gravity = Gravity.START }, LinearLayout.LayoutParams(-1, dp(44)))
-        val brand = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(16), 0, dp(26)) }
-        brand.addView(label("G", 29f, true).apply {
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(if (compact) 5 else 10), 0, dp(if (compact) 5 else 10), dp(16)) }
+        content.addView(button("‹  返回") { if (busy) toast("正在登录，请稍候") else { loginScreen = false; loginFormPassword = ""; render() } }.apply { background = null; gravity = Gravity.START; setPadding(0, 0, 0, 0) }, LinearLayout.LayoutParams(-1, dp(if (compact) 32 else 44)))
+        val brand = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(if (compact) 8 else 16), 0, dp(if (compact) 15 else 26)) }
+        brand.addView(label("G", if (compact) 24f else 29f, true).apply {
             setTextColor(Color.WHITE); gravity = Gravity.CENTER; elevation = dp(5).toFloat()
             background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(0xff367eae.toInt(), 0xff4d9a84.toInt())).apply { cornerRadius = dp(19).toFloat() }
-        }, LinearLayout.LayoutParams(dp(58), dp(58)))
+        }, LinearLayout.LayoutParams(dp(if (compact) 44 else 58), dp(if (compact) 44 else 58)))
         brand.addView(LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), 0, 0, 0); addView(label("GMPluse", 23f, true)); addView(label("让校园生活，从容一点", 11f).apply { alpha = .6f; setPadding(0, dp(4), 0, 0) }) })
         content.addView(brand)
-        content.addView(label("YOUR CAMPUS, YOUR RHYTHM", 10f, true).apply { letterSpacing = .16f; setTextColor(if (dark) 0xff80b9bf.toInt() else 0xff4d8d91.toInt()) })
-        content.addView(label("把校园日常，\n安排得刚刚好。", 31f, true).apply { setLineSpacing(dp(5).toFloat(), 1f); setPadding(0, dp(12), 0, dp(12)) })
-        content.addView(label("一张课表，连接每一天的小目标。", 13f).apply { alpha = .65f; setPadding(0, 0, 0, dp(28)) })
-        val form = card().apply { setPadding(dp(22), dp(24), dp(22), dp(24)); elevation = dp(3).toFloat() }
-        form.addView(label("欢迎回来", 22f, true))
-        form.addView(label("使用学校统一认证账号登录", 12f).apply { alpha = .6f; setPadding(0, dp(7), 0, dp(22)) })
+        if (!compact) content.addView(label("YOUR CAMPUS, YOUR RHYTHM", 10f, true).apply { letterSpacing = .16f; setTextColor(if (dark) 0xff80b9bf.toInt() else 0xff4d8d91.toInt()) })
+        content.addView(label(if (compact) "校园日常，刚刚好。" else "把校园日常，\n安排得刚刚好。", if (compact) 24f else 31f, true).apply { setLineSpacing(dp(5).toFloat(), 1f); setPadding(0, dp(if (compact) 0 else 12), 0, dp(if (compact) 6 else 12)) })
+        content.addView(label("一张课表，连接每一天的小目标。", if (compact) 11f else 13f).apply { alpha = .65f; setPadding(0, 0, 0, dp(if (compact) 16 else 28)) })
+        val form = card().apply { setPadding(dp(if (compact) 17 else 22), dp(if (compact) 17 else 24), dp(if (compact) 17 else 22), dp(if (compact) 13 else 24)); elevation = dp(3).toFloat() }
+        form.addView(label("欢迎回来", if (compact) 20f else 22f, true))
+        form.addView(label("使用学校统一认证账号登录", 12f).apply { alpha = .6f; setPadding(0, dp(5), 0, dp(if (compact) 15 else 22)) })
         val user = EditText(this).apply { setText(loginFormUser); hint = "请输入学号"; inputType = InputType.TYPE_CLASS_TEXT; setAutofillHints(View.AUTOFILL_HINT_USERNAME); isSingleLine = true }
         val pass = EditText(this).apply { setText(loginFormPassword); hint = "请输入密码"; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; setAutofillHints(View.AUTOFILL_HINT_PASSWORD); isSingleLine = true }
         listOf(Triple("◎", "学号", user), Triple("⌑", "密码", pass)).forEach { (icon, title, field) ->
-            form.addView(label(title, 12f, true).apply { alpha = .75f; setPadding(dp(1), 0, 0, dp(8)) })
+            if (!compact) form.addView(label(title, 12f, true).apply { alpha = .75f; setPadding(dp(1), 0, 0, dp(8)) })
             val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), 0, dp(8), 0) }
             fun appearance(focus: Boolean) { row.background = GradientDrawable().apply { setColor(if (dark) 0xff14273a.toInt() else if (focus) 0xfff4f9f7.toInt() else 0xfff2f5f3.toInt()); cornerRadius = dp(15).toFloat(); setStroke(dp(1), if (focus) 0xff7ab4aa.toInt() else if (dark) 0xff294052.toInt() else 0xffe7ede9.toInt()) } }
             appearance(false)
@@ -486,27 +487,27 @@ class MainActivity : Activity() {
                 pass.transformationMethod = if (visible) android.text.method.HideReturnsTransformationMethod.getInstance() else android.text.method.PasswordTransformationMethod.getInstance()
                 pass.setSelection(pass.text.length)
                 (row.getChildAt(2) as Button).text = if (visible) "隐藏" else "显示"
-            }.apply { background = null; textSize = 11f; setTextColor(0xff659394.toInt()) }, LinearLayout.LayoutParams(dp(48), -1))
-            form.addView(row, LinearLayout.LayoutParams(-1, dp(56)).apply { bottomMargin = dp(17) })
+            }.apply { background = null; textSize = 11f; setPadding(dp(2), 0, dp(2), 0); setSingleLine(); setTextColor(0xff659394.toInt()) }, LinearLayout.LayoutParams(dp(44), -1))
+            form.addView(row, LinearLayout.LayoutParams(-1, dp(if (compact) 48 else 56)).apply { bottomMargin = dp(if (compact) 10 else 17) })
         }
         val options = LinearLayout(this)
         val remember = CheckBox(this).apply { text = "保存密码"; textSize = 11f; setTextColor(ink); buttonTintList = android.content.res.ColorStateList.valueOf(0xff4d9290.toInt()); isChecked = loginFormRemember; isEnabled = !busy }
         val automatic = CheckBox(this).apply { text = "自动登录"; textSize = 11f; setTextColor(ink); buttonTintList = android.content.res.ColorStateList.valueOf(0xff4d9290.toInt()); isChecked = loginFormAuto; isEnabled = !busy }
         remember.setOnCheckedChangeListener { _, checked -> if (!checked) automatic.isChecked = false }
         automatic.setOnCheckedChangeListener { _, checked -> if (checked) remember.isChecked = true }
-        options.addView(remember, LinearLayout.LayoutParams(0, dp(40), 1f)); options.addView(automatic, LinearLayout.LayoutParams(0, dp(40), 1f)); form.addView(options)
+        options.addView(remember, LinearLayout.LayoutParams(0, dp(if (compact) 34 else 40), 1f)); options.addView(automatic, LinearLayout.LayoutParams(0, dp(if (compact) 34 else 40), 1f)); form.addView(options)
         if (loginError.isNotBlank()) form.addView(label(loginError, 12f).apply { setTextColor(if (dark) 0xffffb5a9.toInt() else 0xffad5d50.toInt()); setPadding(dp(10), dp(10), dp(10), dp(10)); background = GradientDrawable().apply { setColor(if (dark) 0xff48343c.toInt() else 0xfffff0e9.toInt()); cornerRadius = dp(12).toFloat() } }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
         form.addView(button(if (busy) "正在连接学校…" else "登录，开启今天  →") {
             loginFormUser = user.text.toString().trim(); loginFormPassword = pass.text.toString(); loginFormRemember = remember.isChecked; loginFormAuto = automatic.isChecked
             if (previewScreen != null) { loginError = "这是界面预览，不会提交账号或连接学校。"; render() }
             else if (loginFormUser.isBlank() || loginFormPassword.isBlank()) { loginError = "请填写学号和密码"; render() }
             else authenticate(loginFormUser, loginFormPassword, loginFormRemember, loginFormAuto)
-        }.apply { isEnabled = !busy; textSize = 15f; setTypeface(null, Typeface.BOLD); setTextColor(Color.WHITE); background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xff367ca9.toInt(), 0xff4c9588.toInt())).apply { cornerRadius = dp(17).toFloat() } }, LinearLayout.LayoutParams(-1, dp(56)).apply { topMargin = dp(16) })
+        }.apply { isEnabled = !busy; textSize = 15f; setTypeface(null, Typeface.BOLD); setTextColor(Color.WHITE); background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xff367ca9.toInt(), 0xff4c9588.toInt())).apply { cornerRadius = dp(17).toFloat() } }, LinearLayout.LayoutParams(-1, dp(if (compact) 49 else 56)).apply { topMargin = dp(if (compact) 10 else 16) })
         form.addView(button("▣  使用学校扫码登录") {
             if (previewScreen == null) { loginFormUser = user.text.toString().trim(); loginFormPassword = pass.text.toString(); openLogin(loginFormUser, "", false, true, false) }
-        }.apply { isEnabled = !busy; background = null; setTextColor(if (dark) 0xffa1c6cd.toInt() else 0xff5c7b85.toInt()); textSize = 12f }, LinearLayout.LayoutParams(-1, dp(47)).apply { topMargin = dp(8) })
+        }.apply { isEnabled = !busy; background = null; setTextColor(if (dark) 0xffa1c6cd.toInt() else 0xff5c7b85.toInt()); textSize = 12f }, LinearLayout.LayoutParams(-1, dp(if (compact) 38 else 47)).apply { topMargin = dp(if (compact) 3 else 8) })
         content.addView(form)
-        content.addView(label("◇  直连学校认证 · 数据留在本机", 11f).apply { gravity = Gravity.CENTER; alpha = .65f; setPadding(0, dp(24), 0, dp(6)) })
+        content.addView(label("◇  直连学校认证 · 数据留在本机", 11f).apply { gravity = Gravity.CENTER; alpha = .65f; setPadding(0, dp(if (compact) 16 else 24), 0, dp(6)) })
         content.addView(label("广东工贸职业技术学院 · 个人课表助手", 10f).apply { gravity = Gravity.CENTER; alpha = .4f })
         scroll.addView(content); page.addView(scroll, LinearLayout.LayoutParams(-1, -1))
     }
