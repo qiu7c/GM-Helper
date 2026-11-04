@@ -9,6 +9,8 @@ import WebKit
     @Published var status = "登录后即可同步学校课表"
     @Published var busy = false
     @Published var showLogin = false
+    @Published private(set) var pendingLoginCookies: [HTTPCookie] = []
+    @Published private(set) var pendingLoginURL: URL?
     var freshLogin = false
     @Published var logs: [String] = []
     @Published var background: UIImage?
@@ -47,7 +49,7 @@ import WebKit
         if let calendar = calendar { preferences.week = min(max(calendar.week(on: Date()), 1), calendar.total) }
         restoreCache()
         if !preferences.account.isEmpty { await refresh(followCurrentWeek: true) }
-        if schedule == nil { attemptAutoLogin() }
+        if schedule == nil { await attemptAutoLogin() }
         do {
             let info = try await UpdateInfo.fetch()
             if info.newer && UserDefaults.standard.string(forKey: "native.announced") != info.version {
@@ -56,11 +58,16 @@ import WebKit
             }
         } catch { log("启动更新检查未完成") }
     }
-    func attemptAutoLogin() {
-        if automaticLogin && !triedAutoLogin { triedAutoLogin = true; freshLogin = false; showLogin = true }
+    func attemptAutoLogin() async {
+        guard automaticLogin, !triedAutoLogin else { return }
+        triedAutoLogin = true; freshLogin = false
+        do { try await login(username: preferences.account, password: savedPassword, save: preferences.savePassword, auto: preferences.autoLogin) }
+        catch SchoolError.captcha { showLogin = true }
+        catch { report(error) }
     }
     func openLogin() {
         guard !busy else { return }
+        pendingLoginCookies = []; pendingLoginURL = nil
         freshLogin = true; showLogin = true
     }
     func restoreCache() {
@@ -87,6 +94,7 @@ import WebKit
         guard !busy, !explicitlyLoggedOut, !preferences.account.isEmpty else { return }
         busy = true
         var correctedWeek: Int?
+        var requiresAutoLogin = false
         status = schedule == nil ? "正在获取课表…" : "已显示缓存，正在更新…"
         let requested = scope
         do {
@@ -123,9 +131,10 @@ import WebKit
             await rebuildReminders()
         } catch {
             report(error)
-            if case SchoolError.expired = error { attemptAutoLogin() }
+            if case SchoolError.expired = error { requiresAutoLogin = true }
         }
         busy = false
+        if requiresAutoLogin { await attemptAutoLogin(); return }
         if let current = correctedWeek {
             preferences.week = current; persist(); restoreCache()
             await refresh()
@@ -136,6 +145,49 @@ import WebKit
         else if error is URLError { status = "网络连接未完成，请稍后重试；已保留缓存。" }
         else { status = "本次操作未完成，请重试；已保留缓存。" }
         log(status)
+    }
+    func login(username: String, password: String, save: Bool, auto: Bool) async throws {
+        guard !busy else { throw SchoolError.message("当前同步尚未结束，请稍后登录。") }
+        let account = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !account.isEmpty && !password.isEmpty else { throw SchoolError.message("请输入学校账号和密码。") }
+        triedAutoLogin = true
+        pendingLoginCookies = []; pendingLoginURL = nil
+        status = "正在安全登录学校…"
+        busy = true
+        do {
+            defer { busy = false }
+            let candidate = SchoolClient()
+            do {
+                try await candidate.login(username: account, password: password)
+                let desktop = try await candidate.desktop()
+                try adoptIdentity(candidate, fields: desktop.1, username: account, password: password, save: save, auto: auto)
+            } catch {
+                if case SchoolError.captcha = error {
+                    pendingLoginCookies = candidate.cookies.cookies ?? []
+                    pendingLoginURL = candidate.pendingLoginURL
+                }
+                report(error)
+                throw error
+            }
+        }
+        await rebuildReminders()
+        await refresh(followCurrentWeek: true)
+    }
+    private func adoptIdentity(_ candidate: SchoolClient, fields: [ProfileField], username: String, password: String, save: Bool, auto: Bool) throws {
+        let studentID = fields.first { ["学生编号", "学号"].contains($0.label) }?.value ?? ""
+        guard !studentID.isEmpty else { throw SchoolError.message("尚未取得有效教务学号，请稍后重试登录。") }
+        let previousAccount = preferences.account
+        client.accept(candidate.cookies.cookies ?? [])
+        preferences.account = studentID
+        if previousAccount != studentID { profile = []; schedule = nil; preferences.term = ""; preferences.calendar = nil }
+        preferences.savePassword = save && !password.isEmpty && username == studentID
+        preferences.autoLogin = auto && preferences.savePassword
+        try Keychain.write("password." + studentID, preferences.savePassword ? password.data(using: .utf8) : nil)
+        try client.persistCookies()
+        profile = fields
+        explicitlyLoggedOut = false
+        pendingLoginCookies = []; pendingLoginURL = nil
+        persist(); showLogin = false
     }
     func completeLogin(cookies: [HTTPCookie], username: String, password: String, save: Bool, auto: Bool) async throws {
         guard !busy else { throw SchoolError.message("当前同步尚未结束，请稍后验证登录。") }
@@ -148,27 +200,16 @@ import WebKit
             candidate.accept(cookies)
             try await candidate.verify()
             let desktop = try await candidate.desktop()
-            let studentID = desktop.1.first { ["学生编号", "学号"].contains($0.label) }?.value ?? ""
-            guard !studentID.isEmpty else { throw SchoolError.message("登录页面已打开，但还未获取到学号，请继续完成教务授权。") }
-            // Scope data to the authenticated student, including enterprise-WeChat logins.
-            let previousAccount = preferences.account
-            client.accept(candidate.cookies.cookies ?? [])
-            preferences.account = studentID
-            if previousAccount != studentID { profile = []; schedule = nil; preferences.term = ""; preferences.calendar = nil }
-            preferences.savePassword = save && !password.isEmpty && username == studentID
-            preferences.autoLogin = auto && preferences.savePassword
-            try Keychain.write("password." + studentID, preferences.savePassword ? password.data(using: .utf8) : nil)
-            try client.persistCookies()
-            profile = desktop.1
-            explicitlyLoggedOut = false
-            persist(); showLogin = false
+            try adoptIdentity(candidate, fields: desktop.1, username: username, password: password, save: save, auto: auto)
         }
         // The verified login finishes its exclusive operation before refresh acquires the same gate.
+        await rebuildReminders()
         await refresh(followCurrentWeek: true)
     }
     func logout() async {
         guard !busy else { return }
         explicitlyLoggedOut = true; triedAutoLogin = true
+        pendingLoginCookies = []; pendingLoginURL = nil
         do { try client.clearCookies() } catch { report(error) }
         disk.clearCache(); schedule = nil; profile = []; change = nil
         preferences.reminders = false
@@ -178,6 +219,11 @@ import WebKit
         log("用户主动退出")
     }
     func note(_ course: Course) -> String { disk.note(account: preferences.account, course: course) }
+    func courseColorIndex(course: Course) -> Int { disk.courseColorIndex(account: preferences.account, name: course.name) }
+    func setCourseColor(course: Course, index: Int) {
+        disk.setCourseColor(account: preferences.account, name: course.name, index: index)
+        objectWillChange.send()
+    }
     func saveNote(_ course: Course, text: String) { disk.setNote(account: preferences.account, course: course, text: text); objectWillChange.send() }
     func setBackground(_ image: UIImage?) {
         do { try disk.saveBackground(image?.jpegData(compressionQuality: 0.85)); background = image }

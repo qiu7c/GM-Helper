@@ -11,12 +11,13 @@ enum School {
 }
 
 enum SchoolError: LocalizedError {
-    case expired, unavailable, unrecognized, message(String)
+    case expired, unavailable, unrecognized, captcha, message(String)
     var errorDescription: String? {
         switch self {
         case .expired: return "教务会话已失效，请重新登录；已缓存的课表仍可查看。"
         case .unavailable: return "学校系统暂时不可用，已保留上次课表。"
         case .unrecognized: return "学校返回的页面不是完整课表，已保留上次结果。"
+        case .captcha: return "学校要求验证码，请在验证页面手动完成。"
         case .message(let text): return text
         }
     }

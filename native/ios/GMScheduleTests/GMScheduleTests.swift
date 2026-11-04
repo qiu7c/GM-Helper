@@ -2,6 +2,16 @@ import XCTest
 @testable import GMSchedule
 
 final class GMScheduleTests: XCTestCase {
+    func testCourseColorsArePersistentEditableAndNotBasedOnTextLength() {
+        let defaults = UserDefaults(suiteName: "colors." + UUID().uuidString)!
+        let store = LocalStore(defaults: defaults)
+        XCTAssertEqual(store.courseColorIndex(account: "A", name: "同长甲"), 0)
+        XCTAssertEqual(store.courseColorIndex(account: "A", name: "同长乙"), 1)
+        XCTAssertEqual(store.courseColorIndex(account: "A", name: "同长甲"), 0)
+        store.setCourseColor(account: "A", name: "同长甲", index: 5)
+        XCTAssertEqual(LocalStore(defaults: defaults).courseColorIndex(account: "A", name: "同长甲"), 5)
+        XCTAssertEqual(store.courseColorIndex(account: "B", name: "同长甲"), 0)
+    }
     private func fixture(body: String = "", week: Int = 7, campus: Campus = .tianhe) -> String {
         """
         <select id="xnxq01id"><option value="2026-2027-1">本学期</option></select>
@@ -159,7 +169,48 @@ final class GMScheduleTests: XCTestCase {
     func testOlderPublicReleaseDoesNotPrompt() throws {
         let older = try JSONDecoder().decode(UpdateInfo.self, from: Data(#"{"version":"2.2.7","versionCode":19,"ipa":"https://example.com/old.ipa"}"#.utf8))
         XCTAssertFalse(older.newer)
-        let newer = try JSONDecoder().decode(UpdateInfo.self, from: Data(#"{"version":"3.0.1","versionCode":21}"#.utf8))
+        let newer = try JSONDecoder().decode(UpdateInfo.self, from: Data(#"{"version":"3.0.2","versionCode":22}"#.utf8))
         XCTAssertTrue(newer.newer)
+    }
+    func testCASAESMatchesFixedCBCPKCS7Vector() throws {
+        let encrypted = try SchoolClient.encryptPassword("TestPassword!", salt: "0123456789abcdef", prefix: String(repeating: "A", count: 64), iv: "abcdef0123456789")
+        // Independently generated with Python cryptography AES-CBC and PKCS7(128).
+        XCTAssertEqual(encrypted, "RuHmQqcli5IsBN/z4mo6CrT8bhzylJ7J/01nBxQkV9ZEdo4dJQv0cW7UZRKtDxLl9ErEig0WJdQ76ovWOdTZKPruE8PlpBZaz08irXJER3U=")
+        XCTAssertThrowsError(try SchoolClient.encryptPassword("password", salt: "invalid"))
+    }
+    func testCASFormRetainsDynamicFieldsAndResolvesAction() throws {
+        let html = #"<form id="casLoginForm" action="/authserver/login?execution=e1s2"><input name="execution" value="dynamic-e1s2"><input name="lt" value="dynamic-token"><input name="_eventId" value="submit"></form><script>var pwdDefaultEncryptSalt='0123456789abcdef';</script>"#
+        let form = try SchoolClient.loginForm(html, url: URL(string: School.login)!)
+        XCTAssertEqual(form.fields["execution"], "dynamic-e1s2")
+        XCTAssertEqual(form.fields["lt"], "dynamic-token")
+        XCTAssertEqual(form.fields["_eventId"], "submit")
+        XCTAssertEqual(form.action.absoluteString, "https://sfrz.gdgm.cn/authserver/login?execution=e1s2")
+        XCTAssertEqual(form.salt, "0123456789abcdef")
+        XCTAssertThrowsError(try SchoolClient.loginForm(html.replacingOccurrences(of: "/authserver/login?execution=e1s2", with: "https://example.com/login"), url: URL(string: School.login)!))
+    }
+    func testCaptchaRefreshesSaltBeforePasswordEncryption() throws {
+        XCTAssertEqual(try SchoolClient.captchaSalt(" false::::fedcba9876543210 \n", initial: "0123456789abcdef"), "fedcba9876543210")
+        XCTAssertEqual(try SchoolClient.captchaSalt("false", initial: "0123456789abcdef"), "0123456789abcdef")
+        XCTAssertThrowsError(try SchoolClient.captchaSalt("true::::fedcba9876543210", initial: "0123456789abcdef")) {
+            guard case SchoolError.captcha = $0 else { return XCTFail("captcha must enter the manual continuation path") }
+        }
+        XCTAssertThrowsError(try SchoolClient.captchaSalt("maintenance", initial: "0123456789abcdef")) {
+            if case SchoolError.captcha = $0 { XCTFail("unknown state must not be treated as a solvable captcha") }
+        }
+    }
+    func testCASVisibleErrorsAreRedactedAndCaptchaIsDistinct() throws {
+        let error = try SchoolClient.loginFailure("<div id='msg'>synthetic-user 的 synthetic-password 不正确</div>", username: "synthetic-user", password: "synthetic-password")
+        XCTAssertTrue(error.localizedDescription.contains("[账号]"))
+        XCTAssertTrue(error.localizedDescription.contains("[密码]"))
+        XCTAssertFalse(error.localizedDescription.contains("synthetic-password"))
+        let captcha = try SchoolClient.loginFailure("<script>showTips('验证码错误，请重试')</script>", username: "synthetic-user", password: "synthetic-password")
+        guard case SchoolError.captcha = captcha else { return XCTFail("school captcha error must preserve its classification") }
+    }
+    func testFormEncodingPreservesCiphertextPlusCharacters() throws {
+        let data = try XCTUnwrap(SchoolClient.formBody(["password": "abc+def/ghi=", "username": "student name"]))
+        let raw = try XCTUnwrap(String(data: data, encoding: .utf8))
+        XCTAssertTrue(raw.contains("%2B"))
+        var components = URLComponents(); components.percentEncodedQuery = raw
+        XCTAssertEqual(components.queryItems?.first { $0.name == "password" }?.value, "abc+def/ghi=")
     }
 }

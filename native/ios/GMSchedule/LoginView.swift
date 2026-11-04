@@ -4,31 +4,129 @@ import WebKit
 struct LoginView: View {
     @EnvironmentObject var model: AppStore
     @Environment(\.dismiss) private var dismiss
+    var preview = false
     @State private var username = ""
     @State private var password = ""
     @State private var save = false
     @State private var auto = false
+    @State private var reveal = false
+    @State private var browser = false
     @State private var qr = false
-    @State private var revision = 0
-    @State private var message = "密码由学校网页加密提交；验证码需在下方手动完成。"
-    @State private var verifying = false
+    @State private var message = ""
+    @State private var working = false
     @State private var initialized = false
     var body: some View {
         NavigationView {
-            VStack(spacing: 8) {
-                TextField("学号", text: $username).textContentType(.username).keyboardType(.asciiCapable).autocapitalization(.none).textFieldStyle(.roundedBorder)
-                SecureField("密码（可选自动填入学校网页）", text: $password).textContentType(.password).textFieldStyle(.roundedBorder)
-                HStack {
-                    Toggle("保存密码", isOn: $save)
-                    Toggle("自动登录", isOn: $auto).disabled(!save)
-                }.font(.caption)
-                HStack {
-                    Button("填入网页登录") { revision += 1 }
-                    Spacer()
-                    Button(qr ? "密码登录" : "企业微信扫码") { qr.toggle(); revision += 1 }
+            ZStack {
+                AppBackground()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 22) {
+                        HStack { BrandMark(size: 50); Spacer(); Text("GMPluse").font(.system(size: 17, weight: .bold, design: .rounded)).foregroundColor(Brand.ink) }
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("每一程，都从容。").font(.system(size: 30, weight: .bold, design: .rounded)).foregroundColor(Brand.ink)
+                            Text("欢迎来到广贸课表").font(.title3.weight(.medium))
+                            Text("连接校园，让今天的安排一目了然。")
+                                .font(.subheadline).foregroundColor(.secondary)
+                        }.padding(.top, 2)
+                        VStack(alignment: .leading, spacing: 17) {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("学校账号登录").font(.title3.bold())
+                                Text("使用学校统一认证账号与密码").font(.caption).foregroundColor(.secondary)
+                            }
+                            VStack(spacing: 14) {
+                                HStack(spacing: 13) {
+                                    Image(systemName: "person.crop.rectangle").foregroundColor(Brand.blue).frame(width: 24)
+                                    TextField("学号", text: $username).textContentType(.username).keyboardType(.asciiCapable).autocapitalization(.none).disableAutocorrection(true)
+                                }.padding(16).background(Brand.field).cornerRadius(16)
+                                HStack(spacing: 13) {
+                                    Image(systemName: "lock").foregroundColor(Brand.blue).frame(width: 24)
+                                    Group {
+                                        if reveal { TextField("密码", text: $password) }
+                                        else { SecureField("密码", text: $password) }
+                                    }.textContentType(.password).autocapitalization(.none).disableAutocorrection(true)
+                                    Button { reveal.toggle() } label: { Image(systemName: reveal ? "eye.slash" : "eye").foregroundColor(.secondary) }.accessibilityLabel(reveal ? "隐藏密码" : "显示密码")
+                                }.padding(16).background(Brand.field).cornerRadius(16)
+                            }
+                            HStack {
+                                preference("保存密码", value: $save)
+                                Spacer()
+                                preference("自动登录", value: $auto).disabled(!save).opacity(save ? 1 : 0.45)
+                            }.onChange(of: save) { if !$0 { auto = false } }
+                            Button { login() } label: {
+                                HStack(spacing: 10) {
+                                    if working { ProgressView().tint(.white) }
+                                    Text(working ? "正在连接校园…" : "登录并查看课表").fontWeight(.semibold)
+                                    if !working { Image(systemName: "arrow.right") }
+                                }.frame(maxWidth: .infinity).padding(.vertical, 17).foregroundColor(.white)
+                                    .background(Brand.gradient).cornerRadius(17)
+                                    .shadow(color: Brand.blue.opacity(0.22), radius: 12, y: 6)
+                            }.disabled(working || username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty || preview)
+                            if !message.isEmpty {
+                                Label(message, systemImage: "exclamationmark.circle").font(.caption).foregroundColor(.orange).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }.padding(22).background(Brand.surface).cornerRadius(28)
+                            .overlay(RoundedRectangle(cornerRadius: 28).stroke(Color.white.opacity(0.3), lineWidth: 1))
+                            .shadow(color: Brand.blue.opacity(0.06), radius: 24, y: 10)
+                        VStack(spacing: 14) {
+                            HStack { Rectangle().frame(height: 1); Text("其他登录方式").fixedSize(); Rectangle().frame(height: 1) }.font(.caption).foregroundColor(.secondary.opacity(0.55))
+                            Button { qr = true; browser = true } label: {
+                                Label("企业微信登录", systemImage: "qrcode.viewfinder").font(.subheadline.weight(.medium)).foregroundColor(Brand.blue)
+                                    .padding(.vertical, 13).frame(maxWidth: .infinity).background(Brand.surface.opacity(0.75)).cornerRadius(15)
+                            }.disabled(working || preview)
+                            Label("密码与会话安全保存在本机", systemImage: "lock.shield").font(.caption2).foregroundColor(.secondary)
+                        }.padding(.horizontal, 14)
+                    }.padding(.horizontal, 24).padding(.top, 12).padding(.bottom, 24).frame(maxWidth: 520).frame(maxWidth: .infinity)
                 }
-                Text(message).font(.caption).foregroundColor(.secondary)
-                SchoolWebView(username: username, password: password, qr: qr, revision: revision, automatic: auto && model.automaticLogin && !model.freshLogin, cookies: model.freshLogin ? [] : model.client.cookies.cookies ?? [], onMessage: { message = $0 }, onCookies: { cookies in
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Image(systemName: "xmark").font(.system(size: 13, weight: .bold)).padding(8).background(Brand.surface).clipShape(Circle()) }.disabled(working) } }
+            .sheet(isPresented: $browser) {
+                CaptchaView(username: username, password: password, save: save, auto: auto, qr: qr).environmentObject(model)
+            }
+            .onAppear {
+                if !initialized {
+                    initialized = true
+                    if !preview {
+                        username = model.preferences.account; password = model.savedPassword
+                        save = model.preferences.savePassword; auto = model.preferences.autoLogin
+                        if model.pendingLoginURL != nil { browser = true }
+                    }
+                }
+            }
+        }.navigationViewStyle(.stack).interactiveDismissDisabled(working).tint(Brand.blue)
+    }
+    private func preference(_ title: String, value: Binding<Bool>) -> some View {
+        Button { value.wrappedValue.toggle() } label: {
+            HStack(spacing: 7) { Image(systemName: value.wrappedValue ? "checkmark.square.fill" : "square").font(.system(size: 18)); Text(title).font(.caption) }.foregroundColor(value.wrappedValue ? Brand.blue : .secondary)
+        }.buttonStyle(.plain)
+    }
+    private func login() {
+        working = true; message = ""
+        Task {
+            do { try await model.login(username: username.trimmingCharacters(in: .whitespacesAndNewlines), password: password, save: save, auto: auto); dismiss() }
+            catch SchoolError.captcha { qr = false; browser = true }
+            catch is URLError { message = "暂时无法连接学校，请检查网络后重试。" }
+            catch { message = error.localizedDescription }
+            working = false
+        }
+    }
+}
+
+struct CaptchaView: View {
+    @EnvironmentObject var model: AppStore
+    @Environment(\.dismiss) private var dismiss
+    let username: String
+    let password: String
+    let save: Bool
+    let auto: Bool
+    let qr: Bool
+    @State private var message = "请在学校页面手动完成验证。"
+    @State private var verifying = false
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                Label(message, systemImage: qr ? "qrcode" : "checkmark.shield").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(16).background(Brand.field)
+                SchoolWebView(initialURL: qr ? URL(string: School.login + "&display=qrLogin")! : model.pendingLoginURL ?? URL(string: School.login)!, username: username, password: password, qr: qr, cookies: qr ? [] : model.pendingLoginCookies, onMessage: { message = $0 }, onCookies: { cookies in
                     guard !verifying else { return }; verifying = true
                     Task {
                         do { try await model.completeLogin(cookies: cookies, username: username, password: password, save: save, auto: auto); dismiss() }
@@ -36,27 +134,17 @@ struct LoginView: View {
                         verifying = false
                     }
                 })
-            }
-            .padding(.horizontal)
-            .navigationTitle("学校统一认证").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() }.disabled(verifying) } }
-            .onAppear {
-                if !initialized {
-                    initialized = true
-                    username = model.preferences.account; password = model.savedPassword
-                    save = model.preferences.savePassword; auto = model.preferences.autoLogin
-                }
-            }
+            }.navigationTitle(qr ? "企业微信登录" : "完成安全验证").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("返回") { dismiss() }.disabled(verifying) } }
         }.navigationViewStyle(.stack).interactiveDismissDisabled(verifying)
     }
 }
 
 struct SchoolWebView: UIViewRepresentable {
+    let initialURL: URL
     let username: String
     let password: String
     let qr: Bool
-    let revision: Int
-    let automatic: Bool
     let cookies: [HTTPCookie]
     let onMessage: (String) -> Void
     let onCookies: ([HTTPCookie]) -> Void
@@ -73,54 +161,29 @@ struct SchoolWebView: UIViewRepresentable {
             group.enter()
             config.websiteDataStore.httpCookieStore.setCookie(cookie) { group.leave() }
         }
-        group.notify(queue: .main) { web.load(URLRequest(url: URL(string: School.login)!)) }
+        group.notify(queue: .main) { web.load(URLRequest(url: self.initialURL)) }
         return web
     }
-    func updateUIView(_ web: WKWebView, context: Context) {
-        context.coordinator.parent = self
-        if context.coordinator.revision != revision {
-            context.coordinator.revision = revision
-            if context.coordinator.qr != qr {
-                context.coordinator.qr = qr
-                context.coordinator.enteredPortal = false
-                web.load(URLRequest(url: URL(string: School.login + (qr ? "&display=qrLogin" : ""))!))
-            } else { context.coordinator.fill(web, submit: true) }
-        }
-    }
+    func updateUIView(_ web: WKWebView, context: Context) { context.coordinator.parent = self }
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         var parent: SchoolWebView
-        var revision = 0
         var qr = false
         var enteredPortal = false
-        var submitted = false
-        init(_ parent: SchoolWebView) { self.parent = parent }
-        func fill(_ web: WKWebView, submit: Bool) {
+        init(_ parent: SchoolWebView) { self.parent = parent; self.qr = parent.qr }
+        func fill(_ web: WKWebView) {
             guard web.url?.host == "sfrz.gdgm.cn", !parent.qr else { return }
             let values = [parent.username, parent.password]
             guard let data = try? JSONSerialization.data(withJSONObject: values), let json = String(data: data, encoding: .utf8) else { return }
-            // Values are JSON encoded, never interpolated as executable JavaScript.
+            // Fill only the visible fields. The user completes the school's captcha and submits.
             let script = """
             (() => { const values = \(json);
             const visible = selector => Array.from(document.querySelectorAll(selector)).find(e => e.type !== 'hidden' && e.offsetParent !== null);
             const u=visible('#mobileUsername') || visible('#username,input[name=username]');
             const p=visible('#mobilePassword') || visible('input[type=password]');
-            if(!u || !p || window.__gmSubmitPending) return;
+            if(!u || !p) return;
             for(const [e,value] of [[u,values[0]],[p,values[1]]]) { e.focus();e.value=value;
               for(const type of ['input','change','keyup']) e.dispatchEvent(new Event(type,{bubbles:true}));
               e.blur(); }
-            if(!\(submit ? "true" : "false")) return;
-            // The blur handler asynchronously refreshes needCaptcha and the encryption salt.
-            // Wait for that existing school request; never submit the hidden encrypted-password field.
-            window.__gmSubmitPending=true;let checks=0;
-            const check=()=>{ checks++;
-              if(window.jQuery && window.jQuery.active>0) { if(checks<20) {setTimeout(check,100);return;} window.__gmSubmitPending=false;return; }
-              const captcha=Array.from(document.querySelectorAll('input')).find(e=>e.offsetParent!==null && /captcha|verify|code/i.test(e.name+' '+e.id));
-              const required=typeof window.needCaptcha==='boolean' ? window.needCaptcha : !!captcha;
-              window.__gmSubmitPending=false;
-              if(required && (!captcha || !captcha.value.trim())) return;
-              const button=visible('#load') || visible('#loginButton,#submitBtn,#mobileLoginSubmit,#login_submit,#loginSubmit,button[type=submit],input[type=submit]');
-              if(button) button.click();
-            };setTimeout(check,700);
             })();
             """
             web.evaluateJavaScript(script)
@@ -128,9 +191,8 @@ struct SchoolWebView: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard let url = webView.url else { return }
             if url.host == "sfrz.gdgm.cn" {
-                fill(webView, submit: parent.automatic && !submitted && !parent.password.isEmpty)
-                submitted = true
-                parent.onMessage("请在学校页面确认登录；遇到验证码请手动完成。")
+                fill(webView)
+                parent.onMessage(parent.qr ? "请使用企业微信完成登录。" : "请完成学校验证码，再点击学校页面的登录按钮。")
             }
             if url.host == "eportal.gdgm.cn", (url.path.contains("/new/index") || url.path == "/index.html"), !enteredPortal {
                 enteredPortal = true

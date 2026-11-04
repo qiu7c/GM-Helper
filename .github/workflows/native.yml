@@ -71,16 +71,69 @@ jobs:
       - name: Run iOS unit tests
         run: |
           DEVICE=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for values in d["devices"].values() for v in values if v["name"].startswith("iPhone")))')
+          echo "GM_SIMULATOR=$DEVICE" >> "$GITHUB_ENV"
           xcodebuild -project native/ios/GMSchedule.xcodeproj -scheme GMSchedule \
             -destination "platform=iOS Simulator,id=$DEVICE" \
             -derivedDataPath "$RUNNER_TEMP/gm-ios-tests" \
             -resultBundlePath "$RUNNER_TEMP/gm-ios-tests.xcresult" \
-            CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES test
+            -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES test
+      - name: Capture native iOS interface previews
+        run: |
+          xcrun simctl boot "$GM_SIMULATOR" 2>/dev/null || true
+          xcrun simctl bootstatus "$GM_SIMULATOR" -b
+          xcrun simctl status_bar "$GM_SIMULATOR" override --time '9:41' --batteryState charged --batteryLevel 100
+          xcrun simctl launch --terminate-running-process "$GM_SIMULATOR" cn.gdgm.schedule.gdgmSchedule --preview-login
+          sleep 3
+          xcrun simctl io "$GM_SIMULATOR" screenshot dist/ios-login.png
+          xcrun simctl launch --terminate-running-process "$GM_SIMULATOR" cn.gdgm.schedule.gdgmSchedule --preview-timetable
+          sleep 3
+          xcrun simctl io "$GM_SIMULATOR" screenshot dist/ios-timetable.png
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: GMPluse-native-ios
           path: |
             dist/*.ipa
+            dist/*.png
             ${{ runner.temp }}/gm-ios-tests.xcresult
+          retention-days: 7
+
+  android-visual:
+    needs: android
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@v4
+        with:
+          name: GMPluse-native-android
+          path: android-build
+      - name: Enable emulator hardware acceleration
+        run: sudo chmod a+rw /dev/kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          arch: x86_64
+          disable-animations: true
+          script: |
+            mkdir -p dist
+            adb install android-build/outputs/apk/debug/app-debug.apk
+            adb shell am start -W -n cn.gdgm.schedule.gdgm_schedule.nativepreview/cn.gdgm.nativeapp.MainActivity --es preview_screen login
+            sleep 3
+            adb exec-out screencap -p > dist/android-login.png
+            adb shell am force-stop cn.gdgm.schedule.gdgm_schedule.nativepreview
+            adb shell am start -W -n cn.gdgm.schedule.gdgm_schedule.nativepreview/cn.gdgm.nativeapp.MainActivity --es preview_screen timetable
+            sleep 3
+            adb exec-out screencap -p > dist/android-timetable.png
+            adb logcat -d -s AndroidRuntime:E > dist/android-runtime.txt
+            ! rg -q 'Process: cn.gdgm.schedule.gdgm_schedule.nativepreview' dist/android-runtime.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: GMPluse-native-android-visual
+          path: dist/
           retention-days: 7

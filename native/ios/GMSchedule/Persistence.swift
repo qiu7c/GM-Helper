@@ -74,6 +74,21 @@ final class LocalStore {
         values[course.noteKey] = text.trimmingCharacters(in: .whitespacesAndNewlines)
         defaults.set(values, forKey: "native.notes." + account)
     }
+    func courseColorIndex(account: String, name: String) -> Int {
+        let key = "native.courseColors." + account
+        var values = defaults.dictionary(forKey: key) as? [String: Int] ?? [:]
+        if let index = values[name] { return index }
+        let index = values.count % 8
+        values[name] = index
+        defaults.set(values, forKey: key)
+        return index
+    }
+    func setCourseColor(account: String, name: String, index: Int) {
+        let key = "native.courseColors." + account
+        var values = defaults.dictionary(forKey: key) as? [String: Int] ?? [:]
+        values[name] = index
+        defaults.set(values, forKey: key)
+    }
     var hasLegacyNotes: Bool { defaults.string(forKey: "flutter.course_notes") != nil }
     func importLegacyNotes(into account: String) throws {
         guard let raw = defaults.string(forKey: "flutter.course_notes"), let data = raw.data(using: .utf8) else { return }

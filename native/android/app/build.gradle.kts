@@ -10,8 +10,8 @@ android {
         applicationId = "cn.gdgm.schedule.gdgm_schedule"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20
-        versionName = "3.0.0"
+        versionCode = 21
+        versionName = "3.0.1"
     }
     buildTypes {
         debug {

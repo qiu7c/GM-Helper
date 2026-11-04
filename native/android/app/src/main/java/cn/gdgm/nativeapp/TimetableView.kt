@@ -18,9 +18,13 @@ class TimetableView(
     campus: String,
     dark: Boolean,
     note: (String) -> String,
+    colorIndex: (String) -> Int,
     onCourse: (Course) -> Unit,
     onNote: (Course) -> Unit
 ) : LinearLayout(context) {
+    companion object {
+        val palette = intArrayOf(0xffd8e8fa.toInt(), 0xffd9eee4.toInt(), 0xfff4e9ce.toInt(), 0xfff4dfd4.toInt(), 0xffe6dff5.toInt(), 0xffd6eced.toInt(), 0xffeddfeb.toInt(), 0xffe6e8d6.toInt())
+    }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     init {
         orientation = VERTICAL
@@ -34,14 +38,13 @@ class TimetableView(
             val today = date == LocalDate.now()
             val label = TextView(context).apply {
                 text = "周${days[day - 1]}\n${date.monthValue}/${date.dayOfMonth}"
-                textSize = 11f; gravity = Gravity.CENTER; setTextColor(if (today) 0xff45232b.toInt() else ink)
-                if (today) { background = GradientDrawable().apply { setColor(0xffffa9b5.toInt()); cornerRadius = dp(10).toFloat() }; setTypeface(null, Typeface.BOLD) }
+                textSize = 11f; gravity = Gravity.CENTER; setTextColor(if (today) Color.WHITE else muted)
+                if (today) { background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(0xff367ba2.toInt(), 0xff438d82.toInt())).apply { cornerRadius = dp(14).toFloat() }; setTypeface(null, Typeface.BOLD) }
             }
             header.addView(label, LayoutParams(0, dp(52), 1f).apply { setMargins(dp(1), 0, dp(1), dp(4)) })
         }
         addView(header)
         val times = SchoolConfig.periodTimes(campus)
-        val palette = intArrayOf(0xff547ad4.toInt(), 0xff288879.toInt(), 0xff98712a.toInt(), 0xffb46c38.toInt(), 0xff7c61c4.toInt(), 0xff347f9f.toInt(), 0xff9866a6.toInt(), 0xffa75c79.toInt())
         for (period in 1..6) {
             val row = LinearLayout(context)
             row.gravity = Gravity.TOP
@@ -54,14 +57,21 @@ class TimetableView(
                 contentDescription = "第${period}大节 ${time.first}至${time.second}"
             }, LayoutParams(dp(37), rowHeight))
             for (day in 1..7) {
-                val cell = LinearLayout(context).apply { orientation = VERTICAL }
+                val cell = LinearLayout(context).apply {
+                    orientation = VERTICAL
+                    if (monday.plusDays((day - 1).toLong()) == LocalDate.now()) background = GradientDrawable().apply { setColor(if (dark) 0x183f998f else 0x12448f85); cornerRadius = dp(10).toFloat() }
+                }
                 for (course in courses.filter { it.day == day && it.period == period }) {
                     val memo = note(course.name)
-                    val color = palette[(course.name.hashCode() and Int.MAX_VALUE) % palette.size]
-                    val block = TextView(context).apply {
-                        text = listOf(course.name, course.room.takeIf { it.isNotBlank() }?.let { "@$it" }, course.teacher.takeIf { it.isNotBlank() }, memo.takeIf { it.isNotBlank() }?.let { "✎ $it" }).filterNotNull().joinToString("\n")
-                        setTextColor(Color.WHITE); textSize = 10f; setPadding(dp(4), dp(7), dp(3), dp(4))
-                        background = GradientDrawable().apply { setColor(color); cornerRadius = dp(9).toFloat() }
+                    val color = palette[colorIndex(course.name)]
+                    val fill = if (dark) Color.rgb(Color.red(color) * 30 / 100, Color.green(color) * 30 / 100, Color.blue(color) * 30 / 100) else color
+                    val block = LinearLayout(context).apply {
+                        orientation = VERTICAL; setPadding(dp(5), dp(9), dp(4), dp(5))
+                        background = GradientDrawable().apply { setColor(fill); cornerRadius = dp(12).toFloat() }
+                        addView(TextView(context).apply { text = course.name; textSize = 10.5f; maxLines = 4; setTypeface(null, Typeface.BOLD); setTextColor(if (dark) 0xfff1f4fa.toInt() else 0xff34495c.toInt()); setLineSpacing(dp(1).toFloat(), 1f) })
+                        if (course.room.isNotBlank()) addView(TextView(context).apply { text = course.room; textSize = 9f; maxLines = 2; setTextColor(if (dark) 0xffd3dce7.toInt() else 0xff566a78.toInt()); setPadding(0, dp(6), 0, 0) })
+                        if (course.teacher.isNotBlank()) addView(TextView(context).apply { text = course.teacher; textSize = 9f; maxLines = 1; setTextColor(if (dark) 0xffbec9d5.toInt() else 0xff687884.toInt()); setPadding(0, dp(2), 0, 0) })
+                        if (memo.isNotBlank()) addView(TextView(context).apply { text = "✎ $memo"; textSize = 8f; maxLines = 1; setTextColor(if (dark) Color.WHITE else 0xff405b6a.toInt()); setPadding(0, dp(4), 0, 0) })
                         setOnClickListener { onCourse(course) }; setOnLongClickListener { onNote(course); true }
                         contentDescription = "${course.name}，${course.room}，${course.teacher}。点按详情，长按备注"
                     }

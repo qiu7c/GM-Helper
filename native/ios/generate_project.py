@@ -46,7 +46,7 @@ for target in ["Project", "App", "Test"]:
         if target != "Project":
             settings.update({"TARGETED_DEVICE_FAMILY": "1,2", "CODE_SIGN_STYLE": "Automatic", "PRODUCT_NAME": "$(TARGET_NAME)", "SUPPORTED_PLATFORMS": "iphoneos iphonesimulator", "SUPPORTS_MACCATALYST": "NO"})
         if target == "App":
-            settings.update({"PRODUCT_BUNDLE_IDENTIFIER": "cn.gdgm.schedule.gdgmSchedule", "INFOPLIST_FILE": "GMSchedule/Info.plist", "MARKETING_VERSION": "3.0.0", "CURRENT_PROJECT_VERSION": "20", "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon", "LD_RUNPATH_SEARCH_PATHS": "$(inherited) @executable_path/Frameworks"})
+            settings.update({"PRODUCT_BUNDLE_IDENTIFIER": "cn.gdgm.schedule.gdgmSchedule", "INFOPLIST_FILE": "GMSchedule/Info.plist", "MARKETING_VERSION": "3.0.1", "CURRENT_PROJECT_VERSION": "21", "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon", "LD_RUNPATH_SEARCH_PATHS": "$(inherited) @executable_path/Frameworks"})
         if target == "Test":
             settings.update({"PRODUCT_BUNDLE_IDENTIFIER": "cn.gdgm.schedule.gdgmSchedule.tests", "GENERATE_INFOPLIST_FILE": "YES", "TEST_HOST": "$(BUILT_PRODUCTS_DIR)/GMSchedule.app/GMSchedule", "BUNDLE_LOADER": "$(TEST_HOST)"})
         add(target + configuration, '{isa = XCBuildConfiguration; buildSettings = {' + ' '.join(f'{k} = {quoted(v)};' for k, v in settings.items()) + '}; name = ' + configuration + '; }')

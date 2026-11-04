@@ -113,6 +113,19 @@ class NativeStore(private val context: Context) {
         if (note.isBlank()) notes.remove(courseName) else notes.put(courseName, note.trim())
         prefs.edit().putString("notes.$username", notes.toString()).apply()
     }
+    fun courseColorIndex(courseName: String): Int {
+        val colors = JSONObject(prefs.getString("course_colors.$username", "{}").orEmpty())
+        if (colors.has(courseName)) return colors.getInt(courseName)
+        val index = colors.length() % 8
+        colors.put(courseName, index)
+        prefs.edit().putString("course_colors.$username", colors.toString()).apply()
+        return index
+    }
+    fun setCourseColor(courseName: String, index: Int) {
+        val colors = JSONObject(prefs.getString("course_colors.$username", "{}").orEmpty())
+        colors.put(courseName, index)
+        prefs.edit().putString("course_colors.$username", colors.toString()).apply()
+    }
     fun saveBackground(uri: Uri) {
         context.contentResolver.openInputStream(uri).use { source ->
             requireNotNull(source) { "图片无法读取" }

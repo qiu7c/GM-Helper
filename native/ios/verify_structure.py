@@ -14,8 +14,8 @@ assert all(item in set(ids) for item in re.findall(r"\b[A-F0-9]{24}\b", project)
 for source in (root / "GMSchedule").glob("*.swift"):
     assert f'path = "{source.name}";' in project, source
 assert 'IPHONEOS_DEPLOYMENT_TARGET = "15.0"' in project
-assert 'MARKETING_VERSION = "3.0.0"' in project
-assert 'CURRENT_PROJECT_VERSION = "20"' in project
+assert 'MARKETING_VERSION = "3.0.1"' in project
+assert 'CURRENT_PROJECT_VERSION = "21"' in project
 assert 'version = 2.13.5' in project
 plistlib.loads((root / "GMSchedule/Info.plist").read_bytes())
 ET.parse(root / "GMSchedule.xcodeproj/xcshareddata/xcschemes/GMSchedule.xcscheme")
