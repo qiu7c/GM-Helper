@@ -249,7 +249,7 @@ import WebKit
         } catch { report(error) }
     }
     func checkUpdate() async {
-        do { let info = try await UpdateInfo.fetch(); update = info; status = info.newer ? "发现新版本 \(info.version)" : "当前已是最新版本 3.0.0" }
+        do { let info = try await UpdateInfo.fetch(); update = info; status = info.newer ? "发现新版本 \(info.version)" : "当前已是最新版本 3.0.1" }
         catch { status = "更新检查失败，请稍后重试"; log(status) }
     }
     func courseStatus(now: Date) -> String {
