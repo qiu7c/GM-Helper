@@ -290,6 +290,10 @@ struct TimetableGrid: View {
                 }
             }
             ForEach(1...schedule.campus.periods.count, id: \.self) { period in
+                let periodCourses = schedule.visibleCourses(week: week).filter { $0.period == period }
+                let stackCount = max(1, (1...7).map { day in periodCourses.filter { $0.day == day }.count }.max() ?? 1)
+                let cardHeight: CGFloat = compact ? 120 : 180
+                let rowHeight = CGFloat(stackCount) * cardHeight + CGFloat(stackCount - 1) * 4
                 HStack(alignment: .top, spacing: gap) {
                     VStack(spacing: 5) {
                         Text(String(format: "%02d", period)).font(.system(size: compact ? 13 : 19, weight: .semibold, design: .rounded)).foregroundColor(Brand.ink)
@@ -297,25 +301,24 @@ struct TimetableGrid: View {
                     }.frame(width: timeWidth).padding(.top, 12)
                     ForEach(1...7, id: \.self) { day in
                         VStack(spacing: 4) {
-                            ForEach(schedule.visibleCourses(week: week).filter { $0.day == day && $0.period == period }) { course in
+                            ForEach(periodCourses.filter { $0.day == day }) { course in
                                 let color = Brand.courseColors[colorIndex(course)]
-                                VStack(alignment: .leading, spacing: compact ? 5 : 8) {
+                                VStack(alignment: .leading, spacing: compact ? 5 : 6) {
                                     Capsule().fill(color).frame(width: compact ? 14 : 22, height: 3)
-                                    Text(course.name).font(.system(size: compact ? 10 : 14, weight: .semibold)).foregroundColor(scheme == .dark ? color.opacity(0.95) : Brand.ink).lineLimit(compact ? 4 : nil).fixedSize(horizontal: false, vertical: true)
-                                    if !course.room.isEmpty { Text(course.room).font(.system(size: compact ? 8 : 11)).foregroundColor(scheme == .dark ? .white.opacity(0.72) : color).lineLimit(compact ? 3 : nil).fixedSize(horizontal: false, vertical: true) }
-                                    if !compact && !course.teacher.isEmpty { Text(course.teacher).font(.system(size: 11)).foregroundColor(.secondary) }
+                                    Text(course.name).font(.system(size: compact ? 10 : 14, weight: .semibold)).foregroundColor(scheme == .dark ? color.opacity(0.95) : Brand.ink).lineLimit(compact ? 4 : 3).fixedSize(horizontal: false, vertical: true)
+                                    if !course.room.isEmpty { Text(course.room).font(.system(size: compact ? 8 : 11)).foregroundColor(scheme == .dark ? .white.opacity(0.72) : color).lineLimit(2).fixedSize(horizontal: false, vertical: true) }
+                                    if !compact && !course.teacher.isEmpty { Text(course.teacher).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1) }
                                     if !note(course).isEmpty { Image(systemName: "pencil.line").font(.system(size: compact ? 8 : 11)).foregroundColor(color).accessibilityLabel("有课程备注") }
                                     Spacer(minLength: 0)
-                                }.padding(.horizontal, compact ? 5 : 10).padding(.vertical, compact ? 9 : 12).frame(width: columnWidth, alignment: .leading).frame(minHeight: compact ? 112 : 140)
+                                }.padding(.horizontal, compact ? 5 : 10).padding(.vertical, compact ? 9 : 12).frame(width: columnWidth, height: cardHeight, alignment: .topLeading).clipped()
                                     .background(color.opacity(scheme == .dark ? 0.20 : 0.13)).cornerRadius(compact ? 11 : 16)
                                     .overlay(RoundedRectangle(cornerRadius: compact ? 11 : 16).stroke(color.opacity(0.13), lineWidth: 0.7))
                                     .contentShape(Rectangle()).onTapGesture { select(course) }.onLongPressGesture { select(course) }
                             }
-                            Spacer(minLength: 0)
-                        }.frame(width: columnWidth).frame(minHeight: compact ? 112 : 140)
+                        }.frame(width: columnWidth, height: rowHeight, alignment: .top)
                             .background(isToday(day) ? Brand.blue.opacity(0.035) : Brand.surface.opacity(0.3)).cornerRadius(compact ? 11 : 16)
                     }
-                }.fixedSize(horizontal: false, vertical: true)
+                }.frame(height: rowHeight, alignment: .top)
             }
         }.frame(width: width).foregroundColor(Brand.ink)
     }
