@@ -1,13 +1,12 @@
 import SwiftUI
-import PhotosUI
 
 @main @MainActor struct GMScheduleApp: App {
     @StateObject private var model: AppStore
     init() {
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("--preview-login") || ProcessInfo.processInfo.arguments.contains("--preview-timetable") {
+        if ProcessInfo.processInfo.arguments.contains("--preview-login") || ProcessInfo.processInfo.arguments.contains("--preview-timetable") || ProcessInfo.processInfo.arguments.contains("--preview-settings") {
             let id = "GMSchedule.preview." + UUID().uuidString
-            let disk = LocalStore(defaults: UserDefaults(suiteName: id)!, folder: FileManager.default.temporaryDirectory.appendingPathComponent(id))
+            let disk = LocalStore(defaults: UserDefaults(suiteName: id)!)
             let preview = AppStore(disk: disk)
             Self.preparePreview(preview)
             _model = StateObject(wrappedValue: preview)
@@ -25,10 +24,10 @@ import PhotosUI
                 #else
                 MainView()
                 #endif
-            }.environmentObject(model).preferredColorScheme(model.colorScheme).tint(Brand.blue)
+            }.environmentObject(model).tint(Brand.blue)
                 .task {
                     #if DEBUG
-                    if ProcessInfo.processInfo.arguments.contains("--preview-login") || ProcessInfo.processInfo.arguments.contains("--preview-timetable") { return }
+                    if ProcessInfo.processInfo.arguments.contains("--preview-login") || ProcessInfo.processInfo.arguments.contains("--preview-timetable") || ProcessInfo.processInfo.arguments.contains("--preview-settings") { return }
                     #endif
                     await model.start()
                 }
@@ -37,8 +36,7 @@ import PhotosUI
     #if DEBUG
     private static func preparePreview(_ model: AppStore) {
         model.preferences.account = ""; model.preferences.term = "2026-2027-1"; model.preferences.week = 9
-        model.preferences.campus = .tianhe; model.preferences.theme = 1; model.preferences.background = 0
-        model.background = nil; model.showLogin = false
+        model.preferences.campus = .tianhe; model.showLogin = false
         model.preferences.calendarTerm = model.preferences.term
         model.preferences.calendar = TermCalendar(week: 9, total: 20, date: Date())
         let courses = [
@@ -66,9 +64,9 @@ enum Brand {
     static let blue = Color(red: 0.19, green: 0.43, blue: 0.78)
     static let teal = Color(red: 0.20, green: 0.68, blue: 0.64)
     static let gradient = LinearGradient(colors: [blue, teal], startPoint: .leading, endPoint: .trailing)
-    static let ink = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.88, green: 0.93, blue: 1, alpha: 1) : UIColor(red: 0.13, green: 0.23, blue: 0.36, alpha: 1) })
-    static let surface = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.09, green: 0.14, blue: 0.22, alpha: 0.95) : UIColor(white: 1, alpha: 0.93) })
-    static let field = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.13, green: 0.19, blue: 0.28, alpha: 1) : UIColor(red: 0.95, green: 0.97, blue: 0.99, alpha: 1) })
+    static let ink = Color.primary
+    static let surface = Color(UIColor.secondarySystemGroupedBackground)
+    static let field = Color(UIColor.tertiarySystemGroupedBackground)
     static let courseColors: [Color] = [Color(red: 0.29, green: 0.53, blue: 0.83), Color(red: 0.19, green: 0.62, blue: 0.65), Color(red: 0.58, green: 0.46, blue: 0.76), Color(red: 0.85, green: 0.49, blue: 0.44), Color(red: 0.73, green: 0.58, blue: 0.28), Color(red: 0.41, green: 0.47, blue: 0.72), Color(red: 0.34, green: 0.62, blue: 0.45), Color(red: 0.76, green: 0.43, blue: 0.60)]
 }
 
@@ -98,50 +96,50 @@ struct BrandCard<Content: View>: View {
 
 struct MainView: View {
     @EnvironmentObject var model: AppStore
+    @State private var selectedTab: Int
     init() {
-        let appearance = UITabBarAppearance(); appearance.configureWithDefaultBackground()
-        UITabBar.appearance().standardAppearance = appearance
-        UITabBar.appearance().scrollEdgeAppearance = appearance
+        #if DEBUG
+        _selectedTab = State(initialValue: ProcessInfo.processInfo.arguments.contains("--preview-settings") ? 2 : 0)
+        #else
+        _selectedTab = State(initialValue: 0)
+        #endif
     }
     var body: some View {
         ZStack {
             AppBackground()
-            TabView {
-                TimetableView().tabItem { Label("课表", systemImage: "calendar") }
-                ProfileView().tabItem { Label("我的", systemImage: "person.crop.circle") }
-                SettingsView().tabItem { Label("设置", systemImage: "gearshape") }
-            }
+            TimetableView().opacity(selectedTab == 0 ? 1 : 0).allowsHitTesting(selectedTab == 0).accessibilityHidden(selectedTab != 0)
+            ProfileView().opacity(selectedTab == 1 ? 1 : 0).allowsHitTesting(selectedTab == 1).accessibilityHidden(selectedTab != 1)
+            SettingsView().opacity(selectedTab == 2 ? 1 : 0).allowsHitTesting(selectedTab == 2).accessibilityHidden(selectedTab != 2)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            HStack(spacing: 5) {
+                tab("课表", icon: "calendar", index: 0)
+                tab("我的", icon: "person.crop.circle", index: 1)
+                tab("设置", icon: "slider.horizontal.3", index: 2)
+            }.padding(7).frame(maxWidth: 360).background(.ultraThinMaterial).clipShape(Capsule())
+                .overlay(Capsule().stroke(Color.primary.opacity(0.06), lineWidth: 0.5))
+                .shadow(color: Color.black.opacity(0.08), radius: 18, y: 5)
+                .padding(.horizontal, 24).padding(.top, 8).padding(.bottom, 10)
         }
         .sheet(isPresented: $model.showLogin) { LoginView().environmentObject(model) }
         .alert("课表变动", isPresented: Binding(get: { model.change != nil }, set: { if !$0 { model.change = nil } })) {
             Button("知道了") { model.change = nil }
         } message: { Text(model.change ?? "") }
     }
+    private func tab(_ title: String, icon: String, index: Int) -> some View {
+        Button { selectedTab = index } label: {
+            HStack(spacing: 7) {
+                Image(systemName: icon).font(.system(size: 18, weight: .medium))
+                Text(title).font(.system(size: 13, weight: selectedTab == index ? .semibold : .medium))
+            }.foregroundColor(selectedTab == index ? Brand.blue : .secondary)
+                .frame(maxWidth: .infinity).frame(height: 43)
+                .background(selectedTab == index ? Brand.blue.opacity(0.11) : Color.clear).clipShape(Capsule())
+        }.buttonStyle(.plain).accessibilityAddTraits(selectedTab == index ? .isSelected : [])
+    }
 }
 
 struct AppBackground: View {
-    @EnvironmentObject var model: AppStore
-    @Environment(\.colorScheme) private var scheme
-    var body: some View {
-        Group {
-            if let image = model.background {
-                GeometryReader { geometry in Image(uiImage: image).resizable().scaledToFill().frame(width: geometry.size.width, height: geometry.size.height).clipped().blur(radius: model.preferences.blur) }
-            } else {
-                let palettes: [[Color]] = scheme == .dark ? [
-                    [Color(red: 0.055, green: 0.10, blue: 0.18), Color(red: 0.07, green: 0.16, blue: 0.21)],
-                    [Color(red: 0.07, green: 0.09, blue: 0.14)],
-                    [Color(red: 0.15, green: 0.09, blue: 0.17), Color(red: 0.08, green: 0.11, blue: 0.19)],
-                    [Color(red: 0.06, green: 0.14, blue: 0.13), Color(red: 0.07, green: 0.11, blue: 0.17)]
-                ] : [
-                    [Color(red: 0.91, green: 0.95, blue: 0.98), Color(red: 0.96, green: 0.97, blue: 0.94)],
-                    [Color(red: 0.97, green: 0.97, blue: 0.95)],
-                    [Color(red: 0.98, green: 0.93, blue: 0.94), Color(red: 0.96, green: 0.95, blue: 0.98)],
-                    [Color(red: 0.91, green: 0.96, blue: 0.93), Color(red: 0.96, green: 0.97, blue: 0.94)]
-                ]
-                LinearGradient(colors: palettes[model.preferences.background], startPoint: .topLeading, endPoint: .bottomTrailing)
-            }
-        }.ignoresSafeArea()
-    }
+    var body: some View { Color(UIColor.systemGroupedBackground).ignoresSafeArea() }
 }
 
 struct TimetableView: View {
@@ -153,32 +151,22 @@ struct TimetableView: View {
     @State private var share = false
     var body: some View {
         NavigationView {
-            VStack(spacing: 12) {
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("让校园生活，井然有序").font(.caption).foregroundColor(.secondary)
-                        Text(model.schedule?.terms.first(where: { $0.value == model.preferences.term })?.label ?? "我的校园日程").font(.subheadline.weight(.semibold)).foregroundColor(Brand.ink).lineLimit(1)
+            VStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(model.schedule?.terms.first(where: { $0.value == model.preferences.term })?.label ?? "我的课表").font(.subheadline.weight(.semibold)).foregroundColor(Brand.ink).lineLimit(1)
+                        Text(model.preferences.campus.name + "校区").font(.caption2).foregroundColor(.secondary)
                     }
-                    Spacer(minLength: 0)
-                    Text(model.preferences.campus.name + "校区").font(.caption.weight(.medium)).foregroundColor(Brand.blue).padding(.horizontal, 11).padding(.vertical, 7).background(Brand.blue.opacity(0.09)).clipShape(Capsule())
-                }.padding(.horizontal, 20).padding(.top, 6)
-                HStack(spacing: 10) {
-                    Button { Task { await model.select(week: max(1, model.preferences.week - 1)) } } label: { Image(systemName: "chevron.left").font(.system(size: 13, weight: .bold)).frame(width: 38, height: 38).background(Brand.surface).clipShape(Circle()) }.disabled(model.preferences.week <= 1 || model.busy)
+                    Spacer(minLength: 3)
+                    Button { Task { await model.select(week: max(1, model.preferences.week - 1)) } } label: { Image(systemName: "chevron.left").font(.system(size: 12, weight: .semibold)).frame(width: 30, height: 36) }.disabled(model.preferences.week <= 1 || model.busy)
                     Button { date = Date(); showDates = true } label: {
-                        HStack(spacing: 8) { Text("第 \(model.preferences.week) 周").font(.system(size: 18, weight: .bold, design: .rounded)); Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold)) }
-                            .foregroundColor(Brand.ink).frame(maxWidth: .infinity).padding(.vertical, 12).background(Brand.surface).clipShape(Capsule())
+                        HStack(spacing: 5) { Text("第 \(model.preferences.week) 周").font(.system(size: 15, weight: .semibold, design: .rounded)); Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)) }
+                            .foregroundColor(Brand.ink).padding(.horizontal, 12).frame(height: 36).background(Brand.surface).clipShape(Capsule())
                     }
-                    Button { Task { await model.select(week: min(model.totalWeeks, model.preferences.week + 1)) } } label: { Image(systemName: "chevron.right").font(.system(size: 13, weight: .bold)).frame(width: 38, height: 38).background(Brand.surface).clipShape(Circle()) }.disabled(model.preferences.week >= model.totalWeeks || model.busy)
-                }.padding(.horizontal, 20)
+                    Button { Task { await model.select(week: min(model.totalWeeks, model.preferences.week + 1)) } } label: { Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).frame(width: 30, height: 36) }.disabled(model.preferences.week >= model.totalWeeks || model.busy)
+                }.padding(.horizontal, 16).padding(.top, 4)
                 TimelineView(.periodic(from: Date(), by: 30)) { context in
-                    HStack(spacing: 12) {
-                        Image(systemName: "clock.fill").font(.system(size: 19)).foregroundColor(Brand.teal).frame(width: 38, height: 38).background(Brand.teal.opacity(0.11)).cornerRadius(13)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("校园进行时").font(.caption2.weight(.semibold)).foregroundColor(Brand.teal)
-                            Text(model.courseStatus(now: context.date)).font(.caption.weight(.medium)).foregroundColor(Brand.ink).lineLimit(2)
-                        }
-                        Spacer(minLength: 0)
-                    }.padding(13).frame(maxWidth: .infinity, alignment: .leading).background(Brand.surface).cornerRadius(20).padding(.horizontal, 20)
+                    Label(model.courseStatus(now: context.date), systemImage: "clock").font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 18)
                 }
                 HStack(spacing: 5) {
                     if model.busy { ProgressView().scaleEffect(0.7).frame(width: 14) }
@@ -198,8 +186,8 @@ struct TimetableView: View {
                     if !schedule.remark.isEmpty { Text(schedule.remark).font(.caption).foregroundColor(.secondary).padding(.horizontal) }
                 } else {
                     Spacer()
-                    BrandMark(size: 76)
-                    Text(model.preferences.account.isEmpty ? "你的校园日程，从这里开始" : "这一周，等待同步").font(.headline).foregroundColor(Brand.ink)
+                    BrandMark(size: 56)
+                    Text(model.preferences.account.isEmpty ? "登录查看课表" : "这一周，等待同步").font(.headline).foregroundColor(Brand.ink)
                     Text(model.preferences.account.isEmpty ? "登录后即可查看课程、添加备注与课前提醒" : "连接学校，获取这一周的最新课程").font(.caption).foregroundColor(.secondary)
                     Button { model.openLogin() } label: { Label("连接校园账号", systemImage: "arrow.right").padding(.horizontal, 24).padding(.vertical, 14).foregroundColor(.white).background(Brand.gradient).clipShape(Capsule()) }.padding(.top, 10)
                     Spacer()
@@ -383,13 +371,13 @@ struct ProfileView: View {
             ScrollView {
                 VStack(spacing: 18) {
                     HStack(spacing: 16) {
-                        BrandMark(size: 68)
+                        BrandMark(size: 42)
                         VStack(alignment: .leading, spacing: 7) {
-                            Text(model.preferences.account.isEmpty ? "欢迎，同学" : model.explicitlyLoggedOut ? "期待再次相见" : "你好，广贸人").font(.title2.bold()).foregroundColor(Brand.ink)
-                            Text(model.preferences.account.isEmpty ? "连接账号，开启你的校园日程" : model.explicitlyLoggedOut ? "当前已退出登录" : model.preferences.account).font(.subheadline).foregroundColor(.secondary)
+                            Text(model.preferences.account.isEmpty ? "尚未登录" : "校园账号").font(.headline).foregroundColor(Brand.ink)
+                            Text(model.preferences.account.isEmpty ? "登录后同步课表与学籍" : model.explicitlyLoggedOut ? "当前已退出登录" : model.preferences.account).font(.subheadline).foregroundColor(.secondary)
                         }
                         Spacer(minLength: 0)
-                    }.padding(22).frame(maxWidth: .infinity, alignment: .leading).background(Brand.surface).cornerRadius(26)
+                    }.padding(18).frame(maxWidth: .infinity, alignment: .leading).background(Brand.surface).cornerRadius(20)
                     Button { model.openLogin() } label: {
                         HStack { Label(model.preferences.account.isEmpty ? "登录校园账号" : "登录 / 切换账号", systemImage: "person.crop.circle.badge.checkmark"); Spacer(); Image(systemName: "arrow.up.right") }.font(.subheadline.weight(.semibold)).foregroundColor(.white).padding(19).background(Brand.gradient).cornerRadius(19)
                     }.disabled(model.busy)
@@ -418,7 +406,7 @@ struct ProfileView: View {
                     if !model.preferences.account.isEmpty {
                         Button(role: .destructive) { Task { await model.logout() } } label: { Label("退出登录并清除课表缓存", systemImage: "rectangle.portrait.and.arrow.right").font(.subheadline).frame(maxWidth: .infinity).padding(18).background(Brand.surface).cornerRadius(19) }.disabled(model.busy)
                     }
-                    Text("GMPluse · 陪伴你的校园每一天").font(.caption2).foregroundColor(.secondary).padding(.vertical, 12)
+                    Text("GMPluse · 广贸课表").font(.caption2).foregroundColor(.secondary).padding(.vertical, 12)
                 }.padding(20)
             }.background(AppBackground()).navigationTitle("我的").navigationBarTitleDisplayMode(.inline)
         }.navigationViewStyle(.stack)
@@ -427,30 +415,15 @@ struct ProfileView: View {
 
 struct SettingsView: View {
     @EnvironmentObject var model: AppStore
-    @State private var photos = false
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 18) {
-                    HStack(spacing: 13) {
-                        Image(systemName: "slider.horizontal.3").font(.system(size: 25)).foregroundColor(Brand.blue).padding(15).background(Brand.surface).cornerRadius(19)
-                        VStack(alignment: .leading, spacing: 5) { Text("调成你喜欢的样子").font(.title3.bold()).foregroundColor(Brand.ink); Text("外观、提醒与校园偏好").font(.caption).foregroundColor(.secondary) }
-                        Spacer(minLength: 0)
-                    }.padding(.vertical, 8)
                 BrandCard("课表") {
                     if let schedule = model.schedule {
                         HStack { Text("学期").font(.subheadline); Spacer(minLength: 8); Picker("学期", selection: Binding(get: { model.preferences.term }, set: { value in Task { await model.select(term: value) } })) { ForEach(schedule.terms) { Text($0.label).tag($0.value) } }.disabled(model.busy).labelsHidden().pickerStyle(.menu) }
                     }
                     HStack { Text("校区").font(.subheadline); Spacer(minLength: 8); Picker("校区", selection: Binding(get: { model.preferences.campus }, set: { value in Task { await model.select(campus: value) } })) { ForEach(Campus.allCases) { Text($0.name).tag($0) } }.disabled(model.busy).labelsHidden().pickerStyle(.menu) }
-                }
-                BrandCard("外观") {
-                    HStack { Text("主题").font(.subheadline); Spacer(minLength: 8); Picker("主题", selection: $model.preferences.theme) { Text("跟随系统").tag(0); Text("浅色").tag(1); Text("深色").tag(2) }.onChange(of: model.preferences.theme) { _ in model.persist() }.labelsHidden().pickerStyle(.menu) }
-                    HStack { Text("背景预设").font(.subheadline); Spacer(minLength: 8); Picker("背景预设", selection: $model.preferences.background) { Text("冷岩").tag(0); Text("默认").tag(1); Text("暮樱").tag(2); Text("青林").tag(3) }.onChange(of: model.preferences.background) { _ in model.setBackground(nil); model.persist() }.labelsHidden().pickerStyle(.menu) }
-                    Button("选择自定义背景") { photos = true }
-                    if model.background != nil {
-                        Slider(value: $model.preferences.blur, in: 0...30) { Text("背景模糊") }.onChange(of: model.preferences.blur) { _ in model.persist() }
-                        Button("移除自定义背景") { model.setBackground(nil) }
-                    }
                 }
                 BrandCard("课前提醒") {
                     Toggle("本地课前通知", isOn: Binding(get: { model.preferences.reminders }, set: { value in Task { await model.toggleReminders(value) } }))
@@ -468,7 +441,7 @@ struct SettingsView: View {
                 }
                 BrandCard("关于") {
                     HStack { BrandMark(size: 39); VStack(alignment: .leading, spacing: 3) { Text("GMPluse · 广贸课表").font(.headline); Text("3.0.1 (21)").font(.caption).foregroundColor(.secondary) } }
-                    Text("陪伴你的校园每一天。课表以学校教务系统最新发布为准。").font(.caption).foregroundColor(.secondary)
+                    Text("课表以学校教务系统最新发布为准。").font(.caption).foregroundColor(.secondary)
                     Button("检查更新") { Task { await model.checkUpdate() } }
                     Text(model.status).font(.caption).foregroundColor(.secondary)
                     if let info = model.update {
@@ -478,31 +451,12 @@ struct SettingsView: View {
                     }
                     NavigationLink("运行日志") { List(model.logs.reversed(), id: \.self) { Text($0).font(.caption.monospaced()) }.navigationTitle("运行日志") }
                     NavigationLink("版本说明") {
-                        ScrollView { Text("3.0.1 (21)\n\n使用 SwiftUI 重建 iOS 客户端。包含学校统一认证、周课表、学籍查询、按账号隔离的缓存和备注、背景主题、课表图片分享和本地课前通知。\n\n本版本移除服务器抓取、Bark 和后台轮询。通知仅依据设备已缓存的课表安排。\n\nHTML 解析使用 SwiftSoup（MIT）：https://github.com/scinfu/SwiftSoup\n\n旧 Flutter 数据仅在相同应用容器内尝试导入可归属账号的偏好与课表；旧版无账号备注不会自动归入新账号，旧密码和 Cookie 不导入。").padding() }.navigationTitle("版本说明")
+                        ScrollView { Text("3.0.1 (21)\n\n使用 SwiftUI 重建 iOS 客户端。包含学校统一认证、周课表、学籍查询、按账号隔离的缓存和备注、系统明暗适配、课表图片分享和本地课前通知。\n\n本版本移除服务器抓取、Bark 和后台轮询。通知仅依据设备已缓存的课表安排。\n\nHTML 解析使用 SwiftSoup（MIT）：https://github.com/scinfu/SwiftSoup\n\n旧 Flutter 数据仅在相同应用容器内尝试导入可归属账号的偏好与课表；旧版无账号备注不会自动归入新账号，旧密码和 Cookie 不导入。").padding() }.navigationTitle("版本说明")
                     }
                 }
                 }.padding(20)
             }.background(AppBackground()).navigationTitle("设置").navigationBarTitleDisplayMode(.inline)
-            .sheet(isPresented: $photos) { PhotoPicker { image in model.setBackground(image); photos = false } }
         }.navigationViewStyle(.stack)
-    }
-}
-
-struct PhotoPicker: UIViewControllerRepresentable {
-    let picked: (UIImage?) -> Void
-    func makeCoordinator() -> Coordinator { Coordinator(picked) }
-    func makeUIViewController(context: Context) -> PHPickerViewController {
-        var config = PHPickerConfiguration(); config.filter = .images; config.selectionLimit = 1
-        let picker = PHPickerViewController(configuration: config); picker.delegate = context.coordinator; return picker
-    }
-    func updateUIViewController(_ controller: PHPickerViewController, context: Context) {}
-    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
-        let picked: (UIImage?) -> Void
-        init(_ picked: @escaping (UIImage?) -> Void) { self.picked = picked }
-        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-            guard let provider = results.first?.itemProvider else { picker.dismiss(animated: true); return }
-            provider.loadObject(ofClass: UIImage.self) { [picked] object, _ in DispatchQueue.main.async { picked(object as? UIImage) } }
-        }
     }
 }
 

@@ -50,8 +50,7 @@ class TimetableView(
         for (period in 1..6) {
             val row = LinearLayout(context)
             row.gravity = Gravity.TOP
-            val count = (1..7).maxOf { d -> courses.count { it.day == d && it.period == period } }.coerceAtLeast(1)
-            val rowHeight = dp(if (count > 1) count * 85 else if (compact) 104 else 116)
+            val rowHeight = dp(108)
             row.addView(TextView(context).apply {
                 val time = times[period - 1]
                 text = "$period\n${time.first}\n${time.second}"; textSize = if (compact) 8f else 9f
@@ -66,17 +65,18 @@ class TimetableView(
                         setStroke(dp(1), if (dark) 0x0c99bbcc else 0x08708b83); cornerRadius = dp(9).toFloat()
                     }
                 }
-                for (course in courses.filter { it.day == day && it.period == period }) {
+                val lessons = courses.filter { it.day == day && it.period == period }
+                for (course in lessons) {
                     val memo = note(course.name)
                     val color = palette[colorIndex(course.name)]
                     val fill = if (dark) Color.rgb(Color.red(color) * 30 / 100, Color.green(color) * 30 / 100, Color.blue(color) * 30 / 100) else color
                     val block = LinearLayout(context).apply {
-                        orientation = VERTICAL; setPadding(dp(3), dp(8), dp(3), dp(5))
+                        orientation = VERTICAL; setPadding(dp(3), dp(if (lessons.size > 1) 4 else 8), dp(3), dp(if (lessons.size > 1) 3 else 5))
                         background = GradientDrawable().apply { setColor(fill); cornerRadius = dp(12).toFloat() }
-                        addView(TextView(context).apply { text = course.name; textSize = if (compact) 10f else 10.5f; maxLines = 4; setTypeface(null, Typeface.BOLD); setTextColor(if (dark) 0xfff1f4fa.toInt() else 0xff34495c.toInt()); setLineSpacing(dp(1).toFloat(), 1f) })
-                        if (course.room.isNotBlank()) addView(TextView(context).apply { text = course.room; textSize = 9f; maxLines = 2; setTextColor(if (dark) 0xffd3dce7.toInt() else 0xff566a78.toInt()); setPadding(0, dp(6), 0, 0) })
-                        if (course.teacher.isNotBlank()) addView(TextView(context).apply { text = course.teacher; textSize = 9f; maxLines = 1; setTextColor(if (dark) 0xffbec9d5.toInt() else 0xff687884.toInt()); setPadding(0, dp(2), 0, 0) })
-                        if (memo.isNotBlank()) addView(TextView(context).apply { text = "✎ $memo"; textSize = 8f; maxLines = 1; setTextColor(if (dark) Color.WHITE else 0xff405b6a.toInt()); setPadding(0, dp(4), 0, 0) })
+                        addView(TextView(context).apply { text = course.name; textSize = if (compact) 10f else 10.5f; maxLines = when { lessons.size > 2 -> 1; lessons.size > 1 -> 2; else -> 3 }; ellipsize = android.text.TextUtils.TruncateAt.END; setTypeface(null, Typeface.BOLD); setTextColor(if (dark) 0xfff1f4fa.toInt() else 0xff34495c.toInt()); setLineSpacing(dp(1).toFloat(), 1f) })
+                        if (course.room.isNotBlank() && lessons.size <= 2) addView(TextView(context).apply { text = course.room; textSize = 9f; maxLines = if (lessons.size > 1) 1 else 2; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(if (dark) 0xffd3dce7.toInt() else 0xff566a78.toInt()); setPadding(0, dp(4), 0, 0) })
+                        if (course.teacher.isNotBlank() && lessons.size == 1) addView(TextView(context).apply { text = course.teacher; textSize = 9f; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(if (dark) 0xffbec9d5.toInt() else 0xff687884.toInt()); setPadding(0, dp(2), 0, 0) })
+                        if (memo.isNotBlank() && lessons.size == 1) addView(TextView(context).apply { text = "✎ $memo"; textSize = 8f; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(if (dark) Color.WHITE else 0xff405b6a.toInt()); setPadding(0, dp(4), 0, 0) })
                         setOnClickListener { onCourse(course) }; setOnLongClickListener { onNote(course); true }
                         contentDescription = "${course.name}，${course.room}，${course.teacher}。点按详情，长按备注"
                     }

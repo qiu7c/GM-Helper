@@ -13,7 +13,6 @@ import WebKit
     @Published private(set) var pendingLoginURL: URL?
     var freshLogin = false
     @Published var logs: [String] = []
-    @Published var background: UIImage?
     @Published var update: UpdateInfo?
     @Published var change: String?
     let disk: LocalStore
@@ -24,14 +23,12 @@ import WebKit
     init(disk: LocalStore = LocalStore()) {
         self.disk = disk
         preferences = disk.preferences()
-        background = disk.background.flatMap(UIImage.init(data:))
     }
     var scope: Scope { Scope(account: preferences.account, term: preferences.term, campus: preferences.campus, week: preferences.week) }
     var calendar: TermCalendar? { preferences.calendarTerm == preferences.term ? preferences.calendar : nil }
     var totalWeeks: Int { calendar?.total ?? max(schedule?.weeks.compactMap { Int($0.value) }.max() ?? 20, preferences.week) }
     var automaticLogin: Bool { preferences.autoLogin && !explicitlyLoggedOut && Keychain.read("password." + preferences.account) != nil }
     var savedPassword: String { Keychain.read("password." + preferences.account).flatMap { String(data: $0, encoding: .utf8) } ?? "" }
-    var colorScheme: ColorScheme? { preferences.theme == 1 ? .light : preferences.theme == 2 ? .dark : nil }
     func log(_ message: String) {
         let formatter = DateFormatter(); formatter.dateFormat = "HH:mm:ss"
         logs.append(formatter.string(from: Date()) + " " + message)
@@ -225,10 +222,6 @@ import WebKit
         objectWillChange.send()
     }
     func saveNote(_ course: Course, text: String) { disk.setNote(account: preferences.account, course: course, text: text); objectWillChange.send() }
-    func setBackground(_ image: UIImage?) {
-        do { try disk.saveBackground(image?.jpegData(compressionQuality: 0.85)); background = image }
-        catch { report(error) }
-    }
     func toggleReminders(_ enabled: Bool) async {
         do {
             if enabled {

@@ -25,9 +25,6 @@ struct Preferences: Codable {
     var term = ""
     var campus = Campus.tianhe
     var week = 1
-    var theme = 0
-    var background = 1
-    var blur = 0.0
     var savePassword = false
     var autoLogin = false
     var reminders = false
@@ -38,11 +35,9 @@ struct Preferences: Codable {
 
 final class LocalStore {
     private let defaults: UserDefaults
-    private let folder: URL
     private(set) var entries: [CachedSchedule]
-    init(defaults: UserDefaults = .standard, folder: URL? = nil) {
+    init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        self.folder = folder ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("GMSchedule", isDirectory: true)
         entries = defaults.data(forKey: "native.cache").flatMap { try? JSONDecoder().decode([CachedSchedule].self, from: $0) } ?? []
     }
     func preferences() -> Preferences {
@@ -51,9 +46,6 @@ final class LocalStore {
         value.account = defaults.string(forKey: "flutter.saved_username") ?? ""
         value.term = defaults.string(forKey: "flutter.last_term") ?? ""
         value.campus = Campus(rawValue: defaults.string(forKey: "flutter.last_campus") ?? "") ?? .tianhe
-        value.theme = defaults.integer(forKey: "flutter.theme_mode")
-        if defaults.object(forKey: "flutter.bg_style") != nil { value.background = defaults.integer(forKey: "flutter.bg_style") }
-        value.blur = defaults.double(forKey: "flutter.bg_blur")
         // Old plaintext passwords / flat Cookie headers are deliberately not imported.
         return value
     }
@@ -97,14 +89,6 @@ final class LocalStore {
         for (name, note) in old { values["legacy.name:" + name] = note }
         defaults.set(values, forKey: "native.notes." + account)
     }
-    var background: Data? { try? Data(contentsOf: folder.appendingPathComponent("background.jpg")) }
-    func saveBackground(_ data: Data?) throws {
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let url = folder.appendingPathComponent("background.jpg")
-        if let data = data { try data.write(to: url, options: [.atomic, .completeFileProtection]) }
-        else if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
-    }
-
     // Only import account-attributable data. Flutter's global course_notes has no account;
     // it is left untouched, rather than assigning another person's notes to the current user.
     func importLegacyCache() throws {

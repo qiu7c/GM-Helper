@@ -88,6 +88,9 @@ jobs:
           xcrun simctl launch --terminate-running-process "$GM_SIMULATOR" cn.gdgm.schedule.gdgmSchedule --preview-timetable
           sleep 3
           xcrun simctl io "$GM_SIMULATOR" screenshot dist/ios-timetable.png
+          xcrun simctl launch --terminate-running-process "$GM_SIMULATOR" cn.gdgm.schedule.gdgmSchedule --preview-settings
+          sleep 3
+          xcrun simctl io "$GM_SIMULATOR" screenshot dist/ios-settings.png
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -129,6 +132,10 @@ jobs:
             adb shell am start -W -n cn.gdgm.schedule.gdgm_schedule.nativepreview/cn.gdgm.nativeapp.MainActivity --es preview_screen timetable
             sleep 3
             adb exec-out screencap -p > dist/android-timetable.png
+            adb shell am force-stop cn.gdgm.schedule.gdgm_schedule.nativepreview
+            adb shell am start -W -n cn.gdgm.schedule.gdgm_schedule.nativepreview/cn.gdgm.nativeapp.MainActivity --es preview_screen settings
+            sleep 3
+            adb exec-out screencap -p > dist/android-settings.png
             adb logcat -d -s AndroidRuntime:E > dist/android-runtime.txt
             ! rg -q 'Process: cn.gdgm.schedule.gdgm_schedule.nativepreview' dist/android-runtime.txt
       - uses: actions/upload-artifact@v4
