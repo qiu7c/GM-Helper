@@ -13,7 +13,7 @@ Android（Kotlin / 系统 View）与 iOS（Swift / SwiftUI）为两个独立原�
 
 ## 构建
 
-GitHub Actions `Native Android and iOS` 提供两端独立构建，支持手动运行，并为 `native/rewrite` 分支推送自动验证。不会调用原 Flutter 的发布步骤，不会自动发布 Release。
+GitHub Actions `Native Android and iOS` 为 `native/rewrite` 分支代码推送自动验证。工作流合并进入默认分支后，也可手动运行（[GitHub 的默认分支要求](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)）。不会调用原 Flutter 的发布步骤，不会自动发布 Release。
 
 iOS 云编译使用 macOS runner，构建未签名 IPA 并运行模拟器 XCTest。未签名 IPA 需要自行签名/现有侧载工具安装，不包含 Apple 开发者证书。
 
@@ -27,4 +27,4 @@ Android 保存密码时使用 Android Keystore 中的 AES-GCM 密钥，WebView C
 
 ## 当前验证状态
 
-后续在此记录真实本地/云构建结果，未实际运行的构建和设备检查不视为通过。
+代码 `4759c95` 的[云构建](https://github.com/qiu7c/GM-Helper/actions/runs/41845323841)两端通过：Android 8 项单元测试、Lint、Debug/Release 构建；iOS 16 项模拟器 XCTest、Release 编译、未签名 IPA 打包。详细结果与限制见 `VALIDATION.md`；真机登录、验证码、提醒和旧版升级尚待验收。

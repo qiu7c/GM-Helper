@@ -43,7 +43,7 @@ UserDefaults 保存偏好、课表缓存和按账号隔离的备注；自定义�
 
 ## 验证状态
 
-本目录在 Windows 上完成 Swift 全文件 Tree-sitter 语法解析及 `verify_structure.py` 结构检查；这些检查**不等于 Swift 类型检查、Xcode 构建、模拟器测试或真机验收**。当前环境没有 Xcode，尚未执行上面的 build/test 命令。
+本地 Windows 的 Swift 语法与工程结构检查通过。随后代码 `4759c95` 已在 [GitHub macOS 云构建](https://github.com/qiu7c/GM-Helper/actions/runs/41845323841)完成真实 Xcode Release 编译、未签名 IPA 打包，以及 16 项模拟器 XCTest（0 失败）。这不等于真机验收。
 
 `GMScheduleTests` 含合成 HTML / 虚构凭据测试：奇偶周、多课程解析、真空周与缺表、会话/维护区分、三校区时间、缓存 6 份与账号/周隔离、同范围变更比较、账号备注、Cookie domain/path、提醒日期与 60 条限制、校历、旧更新清单不提示。运行测试不需要学校账号。
 
