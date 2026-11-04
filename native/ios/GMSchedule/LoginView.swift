@@ -39,7 +39,7 @@ struct LoginView: View {
             }
             .padding(.horizontal)
             .navigationTitle("学校统一认证").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() }.disabled(verifying) } }
             .onAppear {
                 if !initialized {
                     initialized = true
@@ -47,7 +47,7 @@ struct LoginView: View {
                     save = model.preferences.savePassword; auto = model.preferences.autoLogin
                 }
             }
-        }.navigationViewStyle(.stack)
+        }.navigationViewStyle(.stack).interactiveDismissDisabled(verifying)
     }
 }
 
@@ -84,7 +84,7 @@ struct SchoolWebView: UIViewRepresentable {
                 context.coordinator.qr = qr
                 context.coordinator.enteredPortal = false
                 web.load(URLRequest(url: URL(string: School.login + (qr ? "&display=qrLogin" : ""))!))
-            } else { context.coordinator.fill(web, submit: false) }
+            } else { context.coordinator.fill(web, submit: true) }
         }
     }
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
@@ -100,9 +100,27 @@ struct SchoolWebView: UIViewRepresentable {
             guard let data = try? JSONSerialization.data(withJSONObject: values), let json = String(data: data, encoding: .utf8) else { return }
             // Values are JSON encoded, never interpolated as executable JavaScript.
             let script = """
-            (() => { const values = \(json); const u=document.querySelector('#username,input[name=username]'); const p=document.querySelector('#password,input[name=password]');
-            if(!u || !p) return; u.value=values[0];p.value=values[1];for(const e of [u,p]){e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));}
-            \(submit ? "const button=document.querySelector('#login_submit,#login_submit_pwd,button[type=submit],input[type=submit]');if(button) button.click();" : "")
+            (() => { const values = \(json);
+            const visible = selector => Array.from(document.querySelectorAll(selector)).find(e => e.type !== 'hidden' && e.offsetParent !== null);
+            const u=visible('#mobileUsername') || visible('#username,input[name=username]');
+            const p=visible('#mobilePassword') || visible('input[type=password]');
+            if(!u || !p || window.__gmSubmitPending) return;
+            for(const [e,value] of [[u,values[0]],[p,values[1]]]) { e.focus();e.value=value;
+              for(const type of ['input','change','keyup']) e.dispatchEvent(new Event(type,{bubbles:true}));
+              e.blur(); }
+            if(!\(submit ? "true" : "false")) return;
+            // The blur handler asynchronously refreshes needCaptcha and the encryption salt.
+            // Wait for that existing school request; never submit the hidden encrypted-password field.
+            window.__gmSubmitPending=true;let checks=0;
+            const check=()=>{ checks++;
+              if(window.jQuery && window.jQuery.active>0) { if(checks<20) {setTimeout(check,100);return;} window.__gmSubmitPending=false;return; }
+              const captcha=Array.from(document.querySelectorAll('input')).find(e=>e.offsetParent!==null && /captcha|verify|code/i.test(e.name+' '+e.id));
+              const required=typeof window.needCaptcha==='boolean' ? window.needCaptcha : !!captcha;
+              window.__gmSubmitPending=false;
+              if(required && (!captcha || !captcha.value.trim())) return;
+              const button=visible('#load') || visible('#loginButton,#submitBtn,#mobileLoginSubmit,#login_submit,#loginSubmit,button[type=submit],input[type=submit]');
+              if(button) button.click();
+            };setTimeout(check,700);
             })();
             """
             web.evaluateJavaScript(script)

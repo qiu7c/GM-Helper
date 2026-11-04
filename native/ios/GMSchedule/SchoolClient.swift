@@ -26,10 +26,10 @@ final class SchoolClient {
             if let cookie = HTTPCookie(properties: properties), Self.schoolCookie(cookie), cookie.expiresDate.map({ $0 > Date() }) ?? true { cookies.setCookie(cookie) }
         }
     }
-    func accept(_ values: [HTTPCookie]) throws {
+    func accept(_ values: [HTTPCookie]) {
+        for cookie in cookies.cookies ?? [] where Self.schoolCookie(cookie) { cookies.deleteCookie(cookie) }
         // HTTPCookieStorage preserves (domain, path, name); same-name SSO cookies never overwrite across hosts.
         for cookie in values where Self.schoolCookie(cookie) { cookies.setCookie(cookie) }
-        try persistCookies()
     }
     func persistCookies() throws {
         let rows = (cookies.cookies ?? []).filter(Self.schoolCookie).compactMap { cookie -> [String: Any]? in
@@ -61,7 +61,6 @@ final class SchoolClient {
     func verify() async throws {
         let html = try await html(School.main)
         guard ["/jsxsd/", "xsMain_new.jsp", "ckgrxx"].contains(where: html.contains) else { throw SchoolError.message("尚未取得有效教务会话，请在网页继续完成授权。") }
-        try persistCookies()
     }
     func schedule(term: String, campus: Campus, week: Int) async throws -> Schedule {
         var fields = ["kbjcmsid": campus.rawValue, "zc": String(week)]

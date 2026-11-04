@@ -61,8 +61,8 @@ struct Course: Codable, Hashable, Identifiable {
     var weeks: [Int] = []
     var day: Int
     var period: Int
-    // A note follows the same teaching course across weeks and campuses, within one account.
-    var noteKey: String { [name, teacher, teachingClass].joined(separator: "\u{1F}") }
+    // One course name keeps its note across teachers, classes, campuses and terms, within an account.
+    var noteKey: String { name }
     var id: String { [noteKey, room, rawWeeks, String(day), String(period)].joined(separator: "\u{1E}") }
     func occurs(in week: Int) -> Bool { weeks.isEmpty || weeks.contains(week) }
 }
@@ -101,7 +101,8 @@ struct TermCalendar: Codable {
         return SchoolClock.calendar.date(byAdding: .day, value: -(week - 1) * 7, to: monday)!
     }
     func week(on date: Date) -> Int {
-        SchoolClock.calendar.dateComponents([.day], from: firstMonday, to: SchoolClock.calendar.startOfDay(for: date)).day! / 7 + 1
+        let raw = SchoolClock.calendar.dateComponents([.day], from: firstMonday, to: SchoolClock.calendar.startOfDay(for: date)).day! / 7 + 1
+        return min(max(raw, 1), total)
     }
 }
 
@@ -131,11 +132,18 @@ struct ProfileField: Codable, Identifiable {
 struct ChangeSummary {
     let added: Int
     let removed: Int
+    let changed: Int
     static func compare(_ previous: CachedSchedule?, _ current: CachedSchedule) -> ChangeSummary? {
         guard let previous = previous, previous.scope == current.scope else { return nil }
-        let old = Set(previous.schedule.courses)
-        let new = Set(current.schedule.courses)
-        return ChangeSummary(added: new.subtracting(old).count, removed: old.subtracting(new).count)
+        let old = previous.schedule.courses.reduce(into: [String: Course]()) { $0["\($1.name)|\($1.day)|\($1.period)"] = $1 }
+        let new = current.schedule.courses.reduce(into: [String: Course]()) { $0["\($1.name)|\($1.day)|\($1.period)"] = $1 }
+        let added = new.keys.filter { old[$0] == nil }.count
+        let removed = old.keys.filter { new[$0] == nil }.count
+        let changed = new.filter { key, course in
+            guard let before = old[key] else { return false }
+            return before.teacher != course.teacher || before.room != course.room || Set(before.weeks) != Set(course.weeks)
+        }.count
+        return ChangeSummary(added: added, removed: removed, changed: changed)
     }
 }
 

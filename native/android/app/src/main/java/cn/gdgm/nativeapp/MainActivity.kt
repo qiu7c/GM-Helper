@@ -395,8 +395,9 @@ class MainActivity : Activity() {
     }
     private fun openLogin(username: String, password: String, remember: Boolean, qr: Boolean, auto: Boolean) {
         if (loginDialog != null) return
+        // 浏览器在验证完成前可能已切换账户；取消时保留缓存，但不再用旧身份发业务请求。
+        sessionExpired = true
         loginUsername = username; loginPassword = password; loginRemember = remember; loginQr = qr; loginVerified = false
-        if (qr || username != store.username) store.clearSession()
         var submitted = false
         val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val hint = TextView(this).apply { text = "请在学校网页完成登录；验证码需要手动输入。"; setPadding(dp(16), dp(10), dp(16), dp(10)) }
@@ -416,7 +417,7 @@ class MainActivity : Activity() {
                     val js = """
                         (function(){
                           var u=${JSONObject.quote(username)},p=${JSONObject.quote(password)};
-                          function fill(selector,value){var e=Array.from(document.querySelectorAll(selector)).find(function(e){return e.offsetParent!==null;});if(!e)return;e.focus();e.value=value;e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));e.dispatchEvent(new Event('keyup',{bubbles:true}));}
+                          function fill(selector,value){var e=Array.from(document.querySelectorAll(selector)).find(function(e){return e.offsetParent!==null;});if(!e)return;e.focus();e.value=value;e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));e.dispatchEvent(new Event('keyup',{bubbles:true}));e.blur();}
                           fill('input[name="username"],#mobileUsername',u);fill('#mobilePassword,input[type="password"]',p);
                           ${if (auto) "setTimeout(function(){var captcha=typeof needCaptcha==='boolean'?needCaptcha:Array.from(document.querySelectorAll('input')).some(function(e){return /captcha|verify|code/i.test(e.name+' '+e.id)&&e.offsetParent!==null;});if(!captcha){var b=document.querySelector('#loginButton,#submitBtn,#load,#mobileLoginSubmit,#login_submit,#loginSubmit,button[type=submit],input[type=submit]');if(b)b.click();}},700);" else ""}
                           return 'filled';
@@ -432,7 +433,13 @@ class MainActivity : Activity() {
         loginDialog = dialog
         dialog.setOnDismissListener { web.stopLoading(); web.destroy(); loginWeb = null; loginDialog = null; loginPassword = ""; if (!loginVerified) toast("已保留现有离线课表") }
         dialog.show(); dialog.window?.setLayout(-1, (resources.displayMetrics.heightPixels * .94).toInt()); dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-        web.loadUrl(if (qr) SchoolConfig.qrUrl else SchoolConfig.loginUrl)
+        val initialUrl = if (qr) SchoolConfig.qrUrl else SchoolConfig.loginUrl
+        if (qr || username != store.username) {
+            CookieManager.getInstance().removeAllCookies {
+                CookieManager.getInstance().flush()
+                if (loginWeb === web) web.loadUrl(initialUrl)
+            }
+        } else web.loadUrl(initialUrl)
     }
     private fun verifyLogin(hint: TextView) {
         if (verifying) return

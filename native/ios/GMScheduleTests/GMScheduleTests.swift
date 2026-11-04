@@ -71,6 +71,49 @@ final class GMScheduleTests: XCTestCase {
         store.setNote(account: "A", course: course, text: "带教材")
         XCTAssertEqual(store.note(account: "A", course: course), "带教材")
         XCTAssertEqual(store.note(account: "B", course: course), "")
+        var anotherTerm = course
+        anotherTerm.teacher = "新老师"; anotherTerm.teachingClass = "新教学班"
+        XCTAssertEqual(store.note(account: "A", course: anotherTerm), "带教材")
+    }
+    func testDiffIgnoresFormattingAndWeekOrderButReportsActualChanges() throws {
+        var schedule = try SchoolHTML.schedule(fixture())
+        schedule.courses = [Course(name: "数学", teacher: "甲", room: "A1", rawWeeks: "1-3(周)", weeks: [1,2,3], day: 1, period: 1)]
+        let scope = Scope(account: "A", term: schedule.term, campus: .tianhe, week: 7)
+        let original = CachedSchedule(scope: scope, schedule: schedule)
+        schedule.courses[0].rawWeeks = "3,1,2(周)"
+        schedule.courses[0].weeks = [3,1,2]
+        schedule.courses[0].teachingClass = "不同班级"
+        schedule.courses[0].section = "01-02节"
+        let cosmetic = try XCTUnwrap(ChangeSummary.compare(original, CachedSchedule(scope: scope, schedule: schedule)))
+        XCTAssertEqual(cosmetic.added + cosmetic.removed + cosmetic.changed, 0)
+        schedule.courses[0].room = "A2"
+        let room = try XCTUnwrap(ChangeSummary.compare(original, CachedSchedule(scope: scope, schedule: schedule)))
+        XCTAssertEqual(room.changed, 1); XCTAssertEqual(room.added + room.removed, 0)
+        schedule.courses[0].day = 2
+        let moved = try XCTUnwrap(ChangeSummary.compare(original, CachedSchedule(scope: scope, schedule: schedule)))
+        XCTAssertEqual(moved.added, 1); XCTAssertEqual(moved.removed, 1); XCTAssertEqual(moved.changed, 0)
+    }
+    @MainActor func testBusyQueryBlocksScopeLoginAndLogoutMutation() async throws {
+        let (store, _) = makeStore()
+        let schedule = try SchoolHTML.schedule(fixture())
+        let scope = Scope(account: "synthetic-A", term: schedule.term, campus: .tianhe, week: 7)
+        try store.put(CachedSchedule(scope: scope, schedule: schedule))
+        let model = AppStore(disk: store)
+        model.preferences.account = scope.account; model.preferences.term = scope.term; model.preferences.week = 7
+        model.busy = true
+        await model.select(week: 8, term: "another-term", campus: .liwan)
+        model.openLogin()
+        await model.logout()
+        XCTAssertEqual(model.scope, scope)
+        XCTAssertFalse(model.showLogin)
+        XCTAssertFalse(model.explicitlyLoggedOut)
+        XCTAssertEqual(store.entries.count, 1)
+    }
+    func testCalendarClampsDatesOutsideTerm() {
+        let first = SchoolClock.calendar.date(from: DateComponents(year: 2026, month: 9, day: 7))!
+        let calendar = TermCalendar(week: 1, total: 20, date: first)
+        XCTAssertEqual(calendar.week(on: first.addingTimeInterval(-60 * 86400)), 1)
+        XCTAssertEqual(calendar.week(on: first.addingTimeInterval(200 * 86400)), 20)
     }
     func testCookieIdentityIncludesDomainAndPath() throws {
         let a = HTTPCookie(properties: [.name: "JSESSIONID", .value: "synthetic-a", .domain: "jw.gdgm.cn", .path: "/jsxsd"])!
@@ -80,6 +123,18 @@ final class GMScheduleTests: XCTestCase {
         defer { storage.deleteCookie(a); storage.deleteCookie(b) }
         XCTAssertEqual(storage.cookies(for: School.schedule)?.first(where: { $0.name == "JSESSIONID" })?.value, "synthetic-a")
         XCTAssertEqual(storage.cookies(for: URL(string: School.login)!)?.first(where: { $0.name == "JSESSIONID" })?.value, "synthetic-b")
+    }
+    func testCandidateLoginCookiesDoNotReplaceCurrentAccountBeforeVerification() {
+        let current = SchoolClient()
+        let candidate = SchoolClient()
+        let a = HTTPCookie(properties: [.name: "JSESSIONID", .value: "synthetic-A", .domain: "jw.gdgm.cn", .path: "/jsxsd"])!
+        let b = HTTPCookie(properties: [.name: "JSESSIONID", .value: "synthetic-B", .domain: "jw.gdgm.cn", .path: "/jsxsd"])!
+        current.accept([a]); candidate.accept([b])
+        XCTAssertEqual(current.cookies.cookies(for: School.schedule)?.first?.value, "synthetic-A")
+        XCTAssertEqual(candidate.cookies.cookies(for: School.schedule)?.first?.value, "synthetic-B")
+        // Only after a verified identity does completeLogin perform this explicit takeover.
+        current.accept(candidate.cookies.cookies ?? [])
+        XCTAssertEqual(current.cookies.cookies(for: School.schedule)?.first?.value, "synthetic-B")
     }
     func testRemindersUseRealDatesFutureOnlyAndCap60() throws {
         let first = SchoolClock.calendar.date(from: DateComponents(year: 2026, month: 9, day: 7))!

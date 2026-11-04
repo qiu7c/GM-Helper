@@ -4,7 +4,12 @@ on:
   workflow_dispatch:
   push:
     branches: [native/rewrite]
-    paths: ["native/**", ".github/workflows/native.yml"]
+    paths:
+      - "native/android/**"
+      - "native/ios/**"
+      - "native/fixtures/**"
+      - ".github/workflows/native.yml"
+      - "!native/**/*.md"
 
 permissions:
   contents: read
@@ -27,6 +32,8 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - name: Build and test native Android
         run: sh gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug assembleRelease
       - uses: actions/upload-artifact@v4
@@ -68,7 +75,7 @@ jobs:
             -destination "platform=iOS Simulator,id=$DEVICE" \
             -derivedDataPath "$RUNNER_TEMP/gm-ios-tests" \
             -resultBundlePath "$RUNNER_TEMP/gm-ios-tests.xcresult" \
-            CODE_SIGNING_ALLOWED=NO test
+            CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES test
       - uses: actions/upload-artifact@v4
         if: always()
         with:

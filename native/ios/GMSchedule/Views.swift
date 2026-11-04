@@ -67,9 +67,11 @@ struct TimetableView: View {
                 }.padding(.horizontal)
                 if let info = model.update, info.newer { HStack { Text("新版本 \(info.version)"); Spacer(); if let url = info.download { Link("查看下载", destination: url) } }.font(.caption).padding(8).background(Color.accentColor.opacity(0.12)) }
                 if let schedule = model.schedule {
-                    ScrollView([.horizontal, .vertical]) {
-                        TimetableGrid(schedule: schedule, week: model.preferences.week, calendar: model.calendar, note: { model.note($0) }, select: { selectedCourse = $0 })
-                            .frame(minWidth: 720).padding(8)
+                    GeometryReader { geometry in
+                        ScrollView(.vertical) {
+                            TimetableGrid(schedule: schedule, week: model.preferences.week, calendar: model.calendar, note: { model.note($0) }, select: { selectedCourse = $0 }, width: geometry.size.width - 16, compact: true)
+                                .padding(8)
+                        }
                     }
                     if !schedule.remark.isEmpty { Text(schedule.remark).font(.caption).foregroundColor(.secondary).padding(.horizontal) }
                 } else {
@@ -86,7 +88,7 @@ struct TimetableView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("本周") {
-                        if let calendar = model.calendar { Task { await model.select(week: min(max(calendar.week(on: Date()), 1), calendar.total)) } }
+                        if let calendar = model.calendar { Task { await model.select(week: min(max(calendar.week(on: Date()), 1), calendar.total), followCurrentWeek: true) } }
                         else { model.status = "请先刷新同步当前学期校历" }
                     }.disabled(model.busy)
                 }
@@ -102,7 +104,7 @@ struct TimetableView: View {
                             Button("跳到第 \(min(max(calendar.week(on: date), 1), calendar.total)) 周") {
                                 showDates = false
                                 Task { await model.select(week: min(max(calendar.week(on: date), 1), calendar.total)) }
-                            }.buttonStyle(.borderedProminent)
+                            }.buttonStyle(.borderedProminent).disabled(model.busy)
                         } else { Text("当前学期校历尚未同步，请联网刷新。") }
                         Picker("周次", selection: Binding(get: { model.preferences.week }, set: { value in showDates = false; Task { await model.select(week: value) } })) {
                             ForEach(1...model.totalWeeks, id: \.self) { Text("第 \($0) 周").tag($0) }
@@ -139,11 +141,15 @@ struct TimetableGrid: View {
     let calendar: TermCalendar?
     let note: (Course) -> String
     let select: (Course) -> Void
+    var width: CGFloat = 1072
+    var compact = false
     private let days = ["一", "二", "三", "四", "五", "六", "日"]
+    private var timeWidth: CGFloat { compact ? 32 : 48 }
+    private var columnWidth: CGFloat { (width - timeWidth - 28) / 7 }
     var body: some View {
         VStack(spacing: 4) {
             HStack(spacing: 4) {
-                Text("时间").frame(width: 48)
+                Text("时间").frame(width: timeWidth)
                 ForEach(1...7, id: \.self) { day in
                     VStack(spacing: 3) {
                         Text("周" + days[day - 1]).fontWeight(.semibold)
@@ -151,34 +157,43 @@ struct TimetableGrid: View {
                             let date = SchoolClock.date(firstMonday: calendar.firstMonday, week: week, day: day, minute: 0)
                             Text(date, format: .dateTime.month().day()).font(.caption2)
                         }
-                    }.frame(maxWidth: .infinity)
+                    }
+                    .frame(width: columnWidth).padding(.vertical, 5)
+                    .foregroundColor(isToday(day) ? .accentColor : .primary)
+                    .background(isToday(day) ? Color.accentColor.opacity(0.16) : Color.clear).cornerRadius(8)
                 }
             }.font(.caption).padding(.vertical, 8)
             ForEach(1...schedule.campus.periods.count, id: \.self) { period in
                 HStack(alignment: .top, spacing: 4) {
                     VStack(spacing: 6) {
                         Text("\(period)").font(.headline)
-                        Text(schedule.campus.periods[period - 1].text).font(.system(size: 10))
-                    }.frame(width: 48).padding(.top, 12)
+                        Text(schedule.campus.periods[period - 1].text).font(.system(size: compact ? 8 : 10))
+                    }.frame(width: timeWidth).padding(.top, 12)
                     ForEach(1...7, id: \.self) { day in
                         VStack(spacing: 4) {
                             ForEach(schedule.visibleCourses(week: week).filter { $0.day == day && $0.period == period }) { course in
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(course.name).font(.system(size: 12, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
-                                    if !course.room.isEmpty { Text(course.room).font(.system(size: 10)) }
-                                    if !course.teacher.isEmpty { Text(course.teacher).font(.system(size: 10)) }
-                                    if !note(course).isEmpty { Text("✎ " + note(course)).font(.system(size: 10)).lineLimit(3) }
+                                    Text(course.name).font(.system(size: compact ? 10 : 12, weight: .semibold)).lineLimit(compact ? 4 : nil).fixedSize(horizontal: false, vertical: true)
+                                    if !course.room.isEmpty { Text(course.room).font(.system(size: compact ? 9 : 10)).lineLimit(compact ? 2 : nil) }
+                                    if !compact && !course.teacher.isEmpty { Text(course.teacher).font(.system(size: 10)) }
+                                    if !note(course).isEmpty { Text(compact ? "✎" : "✎ " + note(course)).font(.system(size: 10)).lineLimit(3) }
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(7)
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(compact ? 3 : 7)
                                 .background(courseColor(course.name).opacity(0.19)).cornerRadius(9)
                                 .contentShape(Rectangle()).onTapGesture { select(course) }.onLongPressGesture { select(course) }
                             }
                             Spacer(minLength: 0)
-                        }.frame(maxWidth: .infinity, minHeight: 110).background(Color.secondary.opacity(0.05)).cornerRadius(9)
+                        }.frame(width: columnWidth).frame(minHeight: 110)
+                        .background(isToday(day) ? Color.accentColor.opacity(0.07) : Color.secondary.opacity(0.05)).cornerRadius(9).clipped()
                     }
                 }.fixedSize(horizontal: false, vertical: true)
             }
-        }.foregroundColor(.primary)
+        }.frame(width: width).foregroundColor(.primary)
+    }
+    private func isToday(_ day: Int) -> Bool {
+        guard let calendar = calendar else { return false }
+        let date = SchoolClock.date(firstMonday: calendar.firstMonday, week: week, day: day, minute: 0)
+        return SchoolClock.calendar.isDate(date, inSameDayAs: Date())
     }
     private func courseColor(_ name: String) -> Color {
         let index = name.unicodeScalars.reduce(0) { ($0 + Int($1.value)) % 6 }
@@ -214,7 +229,7 @@ struct ProfileView: View {
         NavigationView {
             List {
                 Section("账号") {
-                    Text(model.preferences.account.isEmpty ? "尚未登录" : model.preferences.account)
+                    Text(model.preferences.account.isEmpty ? "尚未登录" : model.explicitlyLoggedOut ? "已退出 · 上次账号 \(model.preferences.account)" : model.preferences.account)
                     Button("登录 / 切换账号") { model.openLogin() }.disabled(model.busy)
                 }
                 if model.disk.hasLegacyNotes && !model.preferences.account.isEmpty {
