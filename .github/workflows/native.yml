@@ -70,7 +70,7 @@ jobs:
           zip -qry "$GITHUB_WORKSPACE/dist/GMPluse-native-unsigned.ipa" Payload
       - name: Run iOS unit tests
         run: |
-          DEVICE=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for values in d["devices"].values() for v in values if v["name"].startswith("iPhone")))')
+          DEVICE=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); phones=[v for values in d["devices"].values() for v in values if v["name"].startswith("iPhone")]; print(next((v["udid"] for v in phones if "SE" in v["name"]), phones[0]["udid"]))')
           echo "GM_SIMULATOR=$DEVICE" >> "$GITHUB_ENV"
           xcodebuild -project native/ios/GMSchedule.xcodeproj -scheme GMSchedule \
             -destination "platform=iOS Simulator,id=$DEVICE" \

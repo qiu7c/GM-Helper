@@ -128,11 +128,11 @@ struct MainView: View {
     }
     private func tab(_ title: String, icon: String, index: Int) -> some View {
         Button { selectedTab = index } label: {
-            HStack(spacing: 7) {
+            VStack(spacing: 3) {
                 Image(systemName: icon).font(.system(size: 18, weight: .medium))
-                Text(title).font(.system(size: 13, weight: selectedTab == index ? .semibold : .medium))
+                Text(title).font(.system(size: 10, weight: selectedTab == index ? .semibold : .medium))
             }.foregroundColor(selectedTab == index ? Brand.blue : .secondary)
-                .frame(maxWidth: .infinity).frame(height: 43)
+                .frame(maxWidth: .infinity).frame(height: 46)
                 .background(selectedTab == index ? Brand.blue.opacity(0.11) : Color.clear).clipShape(Capsule())
         }.buttonStyle(.plain).accessibilityAddTraits(selectedTab == index ? .isSelected : [])
     }
@@ -178,12 +178,10 @@ struct TimetableView: View {
                 if let info = model.update, info.newer { HStack { Text("新版本 \(info.version)"); Spacer(); if let url = info.download { Link("查看下载", destination: url) } }.font(.caption).padding(8).background(Color.accentColor.opacity(0.12)) }
                 if let schedule = model.schedule {
                     GeometryReader { geometry in
-                        ScrollView(.vertical) {
-                            TimetableGrid(schedule: schedule, week: model.preferences.week, calendar: model.calendar, note: { model.note($0) }, colorIndex: { model.courseColorIndex(course: $0) }, select: { selectedCourse = $0 }, width: geometry.size.width - 16, compact: true)
-                                .padding(8)
-                        }
+                        TimetableGrid(schedule: schedule, week: model.preferences.week, calendar: model.calendar, note: { model.note($0) }, colorIndex: { model.courseColorIndex(course: $0) }, select: { selectedCourse = $0 }, width: geometry.size.width - 16, compact: true, availableHeight: geometry.size.height - 8)
+                            .padding(.horizontal, 8).padding(.bottom, 8)
                     }
-                    if !schedule.remark.isEmpty { Text(schedule.remark).font(.caption).foregroundColor(.secondary).padding(.horizontal) }
+                    if !schedule.remark.isEmpty { Text(schedule.remark).font(.caption2).foregroundColor(.secondary).lineLimit(1).padding(.horizontal) }
                 } else {
                     Spacer()
                     BrandMark(size: 56)
@@ -256,6 +254,7 @@ struct TimetableGrid: View {
     let select: (Course) -> Void
     var width: CGFloat = 1072
     var compact = false
+    var availableHeight: CGFloat = 0
     @Environment(\.colorScheme) private var scheme
     private let days = ["一", "二", "三", "四", "五", "六", "日"]
     private var gap: CGFloat { compact ? 3 : 6 }
@@ -264,7 +263,7 @@ struct TimetableGrid: View {
     var body: some View {
         VStack(spacing: compact ? 6 : 10) {
             HStack(spacing: gap) {
-                VStack(spacing: 3) { Text("\(month)月").font(.system(size: compact ? 10 : 14, weight: .semibold)); Text("时间").font(.system(size: compact ? 8 : 10)).foregroundColor(.secondary) }.frame(width: timeWidth)
+                VStack(spacing: 3) { Text("\(month)月").font(.system(size: compact ? 10 : 14, weight: .semibold)); Text("时间").font(.system(size: compact ? 8 : 10)).foregroundColor(.secondary) }.frame(width: timeWidth, height: compact ? 46 : 70)
                 ForEach(1...7, id: \.self) { day in
                     VStack(spacing: 5) {
                         Text(days[day - 1]).font(.system(size: compact ? 11 : 15, weight: .medium))
@@ -272,7 +271,7 @@ struct TimetableGrid: View {
                             let date = SchoolClock.date(firstMonday: calendar.firstMonday, week: week, day: day, minute: 0)
                             Text("\(SchoolClock.calendar.component(.day, from: date))").font(.system(size: compact ? 14 : 20, weight: .semibold, design: .rounded))
                         }
-                    }.frame(width: columnWidth).padding(.vertical, 10)
+                    }.frame(width: columnWidth, height: compact ? 46 : 70)
                         .foregroundColor(isToday(day) ? .white : Brand.ink)
                         .background(LinearGradient(colors: isToday(day) ? [Brand.blue, Brand.teal] : [Brand.surface.opacity(0.68)], startPoint: .topLeading, endPoint: .bottomTrailing)).cornerRadius(compact ? 13 : 18)
                 }
@@ -280,28 +279,34 @@ struct TimetableGrid: View {
             ForEach(1...schedule.campus.periods.count, id: \.self) { period in
                 let periodCourses = schedule.visibleCourses(week: week).filter { $0.period == period }
                 let stackCount = max(1, (1...7).map { day in periodCourses.filter { $0.day == day }.count }.max() ?? 1)
-                let cardHeight: CGFloat = compact ? 120 : 180
-                let rowHeight = CGFloat(stackCount) * cardHeight + CGFloat(stackCount - 1) * 4
+                let cardHeight: CGFloat = 180
+                let rowHeight = compact ? (availableHeight - 46 - CGFloat(schedule.campus.periods.count) * 6) / CGFloat(schedule.campus.periods.count) : CGFloat(stackCount) * cardHeight + CGFloat(stackCount - 1) * 4
                 HStack(alignment: .top, spacing: gap) {
-                    VStack(spacing: 5) {
-                        Text(String(format: "%02d", period)).font(.system(size: compact ? 13 : 19, weight: .semibold, design: .rounded)).foregroundColor(Brand.ink)
-                        Text(schedule.campus.periods[period - 1].text).font(.system(size: compact ? 8 : 10, design: .rounded)).foregroundColor(.secondary).lineSpacing(3)
-                    }.frame(width: timeWidth).padding(.top, 12)
+                    VStack(spacing: compact ? 2 : 5) {
+                        Text(String(format: "%02d", period)).font(.system(size: compact ? 11 : 19, weight: .semibold, design: .rounded)).foregroundColor(Brand.ink)
+                        Text(schedule.campus.periods[period - 1].text).font(.system(size: compact ? 7.5 : 10, design: .rounded)).foregroundColor(.secondary).lineSpacing(compact ? 1 : 3)
+                    }.frame(width: timeWidth).padding(.top, compact ? 3 : 12)
                     ForEach(1...7, id: \.self) { day in
+                        let cellCourses = periodCourses.filter { $0.day == day }
                         VStack(spacing: 4) {
-                            ForEach(periodCourses.filter { $0.day == day }) { course in
-                                let color = Brand.courseColors[colorIndex(course)]
-                                VStack(alignment: .leading, spacing: compact ? 5 : 6) {
-                                    Capsule().fill(color).frame(width: compact ? 14 : 22, height: 3)
-                                    Text(course.name).font(.system(size: compact ? 10 : 14, weight: .semibold)).foregroundColor(scheme == .dark ? color.opacity(0.95) : Brand.ink).lineLimit(compact ? 4 : 3).fixedSize(horizontal: false, vertical: true)
-                                    if !course.room.isEmpty { Text(course.room).font(.system(size: compact ? 8 : 11)).foregroundColor(scheme == .dark ? .white.opacity(0.72) : color).lineLimit(2).fixedSize(horizontal: false, vertical: true) }
-                                    if !compact && !course.teacher.isEmpty { Text(course.teacher).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1) }
-                                    if !note(course).isEmpty { Image(systemName: "pencil.line").font(.system(size: compact ? 8 : 11)).foregroundColor(color).accessibilityLabel("有课程备注") }
-                                    Spacer(minLength: 0)
-                                }.padding(.horizontal, compact ? 5 : 10).padding(.vertical, compact ? 9 : 12).frame(width: columnWidth, height: cardHeight, alignment: .topLeading).clipped()
-                                    .background(color.opacity(scheme == .dark ? 0.20 : 0.13)).cornerRadius(compact ? 11 : 16)
-                                    .overlay(RoundedRectangle(cornerRadius: compact ? 11 : 16).stroke(color.opacity(0.13), lineWidth: 0.7))
-                                    .contentShape(Rectangle()).onTapGesture { select(course) }.onLongPressGesture { select(course) }
+                            if compact {
+                                if let first = cellCourses.first {
+                                    if cellCourses.count == 1 {
+                                        courseCard(first, height: rowHeight).contentShape(Rectangle()).onTapGesture { select(first) }.onLongPressGesture { select(first) }
+                                    } else {
+                                        Menu {
+                                            ForEach(cellCourses) { course in
+                                                Button(course.name + (course.room.isEmpty ? "" : " · " + course.room)) { select(course) }
+                                            }
+                                        } label: {
+                                            courseCard(first, height: rowHeight, additional: cellCourses.count - 1)
+                                        }.buttonStyle(.plain).accessibilityLabel("此节共 \(cellCourses.count) 门课程，点按选择")
+                                    }
+                                }
+                            } else {
+                                ForEach(cellCourses) { course in
+                                    courseCard(course, height: cardHeight).contentShape(Rectangle()).onTapGesture { select(course) }.onLongPressGesture { select(course) }
+                                }
                             }
                         }.frame(width: columnWidth, height: rowHeight, alignment: .top)
                             .background(isToday(day) ? Brand.blue.opacity(0.035) : Brand.surface.opacity(0.3)).cornerRadius(compact ? 11 : 16)
@@ -309,6 +314,22 @@ struct TimetableGrid: View {
                 }.frame(height: rowHeight, alignment: .top)
             }
         }.frame(width: width).foregroundColor(Brand.ink)
+    }
+    private func courseCard(_ course: Course, height: CGFloat, additional: Int = 0) -> some View {
+        let color = Brand.courseColors[colorIndex(course)]
+        return VStack(alignment: .leading, spacing: compact ? 3 : 6) {
+            if !compact { Capsule().fill(color).frame(width: 22, height: 3) }
+            Text(course.name).font(.system(size: compact ? 10 : 14, weight: .semibold)).foregroundColor(scheme == .dark ? color.opacity(0.95) : Brand.ink).lineLimit(compact ? (height >= 72 ? 3 : 2) : 3).fixedSize(horizontal: false, vertical: true)
+            if !course.room.isEmpty { Text(course.room).font(.system(size: compact ? 8 : 11)).foregroundColor(scheme == .dark ? .white.opacity(0.72) : color).lineLimit(compact ? 1 : 2).padding(.trailing, additional > 0 ? 12 : 0) }
+            if !compact && !course.teacher.isEmpty { Text(course.teacher).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1) }
+            if !compact && !note(course).isEmpty { Image(systemName: "pencil.line").font(.system(size: 11)).foregroundColor(color).accessibilityLabel("有课程备注") }
+            Spacer(minLength: 0)
+        }.padding(.horizontal, compact ? 4 : 10).padding(.vertical, compact ? 5 : 12).frame(width: columnWidth, height: height, alignment: .topLeading).clipped()
+            .background(color.opacity(scheme == .dark ? 0.20 : 0.13)).cornerRadius(compact ? 8 : 16)
+            .overlay(RoundedRectangle(cornerRadius: compact ? 8 : 16).stroke(color.opacity(0.13), lineWidth: 0.7))
+            .overlay(alignment: .bottomTrailing) {
+                if additional > 0 { Text("+\(additional)").font(.system(size: 7, weight: .semibold)).foregroundColor(color).padding(3).background(Brand.surface.opacity(0.8)).cornerRadius(4).padding(2) }
+            }
     }
     private var month: Int {
         let date = calendar.map { SchoolClock.date(firstMonday: $0.firstMonday, week: week, day: 1, minute: 0) } ?? Date()

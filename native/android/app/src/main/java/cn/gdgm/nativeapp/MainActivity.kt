@@ -140,53 +140,77 @@ class MainActivity : Activity() {
             background = GradientDrawable().apply { setColor(if (dark) 0xff253343.toInt() else Color.WHITE); cornerRadius = dp(24).toFloat(); setStroke(dp(1), if (dark) 0xff344353.toInt() else 0xffe8ecef.toInt()) }
         }
         listOf("课表", "我的", "设置").forEachIndexed { index, title ->
-            nav.addView(button(title) { tab = index; render() }.apply {
-                setSingleLine(); setPadding(0, 0, 0, 0); textSize = 13f
-                setTextColor(if (tab == index) if (dark) 0xffa7d4d2.toInt() else 0xff367e84.toInt() else if (dark) 0xffabb7c5.toInt() else 0xff7d8894.toInt())
-                background = GradientDrawable().apply { setColor(if (tab == index) if (dark) 0xff344c5a.toInt() else 0xffeaf2f1.toInt() else Color.TRANSPARENT); cornerRadius = dp(19).toFloat() }
-                setTypeface(null, if (tab == index) Typeface.BOLD else Typeface.NORMAL)
-            }, LinearLayout.LayoutParams(0, dp(42), 1f))
+            val selected = tab == index
+            val tint = if (selected) if (dark) 0xffa7d4d2.toInt() else 0xff367e84.toInt() else if (dark) 0xffabb7c5.toInt() else 0xff7d8894.toInt()
+            val item = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; isClickable = true; isFocusable = true; isSelected = selected; contentDescription = title
+                background = GradientDrawable().apply { setColor(if (selected) if (dark) 0xff344c5a.toInt() else 0xffeaf2f1.toInt() else Color.TRANSPARENT); cornerRadius = dp(19).toFloat() }
+                setOnClickListener { tab = index; render() }
+            }
+            item.addView(object : View(this) {
+                val pen = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = tint; style = android.graphics.Paint.Style.STROKE; strokeWidth = 1.7f; strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND }
+                override fun onDraw(canvas: Canvas) {
+                    super.onDraw(canvas); canvas.save(); canvas.scale(width / 24f, height / 24f)
+                    when (index) {
+                        0 -> {
+                            canvas.drawRoundRect(3f, 5f, 21f, 22f, 3f, 3f, pen); canvas.drawLine(3f, 10f, 21f, 10f, pen)
+                            canvas.drawLine(8f, 3f, 8f, 7f, pen); canvas.drawLine(16f, 3f, 16f, 7f, pen)
+                            canvas.drawLine(8f, 14f, 8f, 18f, pen); canvas.drawLine(13f, 14f, 16f, 14f, pen); canvas.drawLine(13f, 18f, 16f, 18f, pen)
+                        }
+                        1 -> {
+                            canvas.drawCircle(12f, 7.5f, 4f, pen)
+                            val path = android.graphics.Path().apply { moveTo(4f, 22f); cubicTo(4f, 11f, 20f, 11f, 20f, 22f) }; canvas.drawPath(path, pen)
+                        }
+                        else -> {
+                            val gear = android.graphics.Path()
+                            for (n in 0 until 32) { val angle = n * Math.PI / 16; val radius = if (n % 4 < 2) 10f else 8f; val x = 12f + (kotlin.math.cos(angle) * radius).toFloat(); val y = 12f + (kotlin.math.sin(angle) * radius).toFloat(); if (n == 0) gear.moveTo(x, y) else gear.lineTo(x, y) }
+                            gear.close(); canvas.drawPath(gear, pen); canvas.drawCircle(12f, 12f, 3.2f, pen)
+                        }
+                    }
+                    canvas.restore()
+                }
+            }, LinearLayout.LayoutParams(dp(20), dp(20)))
+            item.addView(label(title, 10f, selected).apply { setTextColor(tint); gravity = Gravity.CENTER; includeFontPadding = false; setPadding(0, dp(3), 0, 0) })
+            nav.addView(item, LinearLayout.LayoutParams(0, dp(48), 1f))
         }
-        root.addView(nav, FrameLayout.LayoutParams(-1, dp(52), Gravity.BOTTOM).apply { setMargins(dp(28), 0, dp(28), dp(14)) })
+        root.addView(nav, FrameLayout.LayoutParams(-1, dp(58), Gravity.BOTTOM).apply { setMargins(dp(28), 0, dp(28), dp(12)) })
     }
 
     private fun renderTimetable() {
         val top = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(3), 0, dp(3), dp(6)) }
         val title = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         val term = schedule?.terms?.firstOrNull { it.value == schedule?.selectedTerm }?.label ?: schedule?.selectedTerm ?: "课表"
-        title.addView(label(term, 15f, true).apply { setSingleLine(); ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, dp(42), 1f))
-        title.addView(button("分享") { share() }.apply { background = null; textSize = 12f; setPadding(dp(8), 0, dp(8), 0); setSingleLine() }, LinearLayout.LayoutParams(dp(48), dp(42)))
-        title.addView(button("刷新") { load() }.apply { background = null; textSize = 12f; setPadding(dp(8), 0, dp(8), 0); setSingleLine() }, LinearLayout.LayoutParams(dp(48), dp(42)))
+        title.addView(label(term, 15f, true).apply { setSingleLine(); ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, dp(36), 1f))
+        title.addView(button("分享") { share() }.apply { background = null; textSize = 12f; setPadding(dp(8), 0, dp(8), 0); setSingleLine() }, LinearLayout.LayoutParams(dp(48), dp(36)))
+        title.addView(button("刷新") { load() }.apply { background = null; textSize = 12f; setPadding(dp(8), 0, dp(8), 0); setSingleLine() }, LinearLayout.LayoutParams(dp(48), dp(36)))
         top.addView(title)
         val monday = store.firstMonday.plusWeeks((week - 1).toLong())
         val controls = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        controls.addView(button("‹") { changeWeek(week - 1) }.apply { background = null; textSize = 23f; setPadding(0, 0, 0, 0) }, LinearLayout.LayoutParams(dp(30), dp(38)))
-        controls.addView(button("第 $week 周 ▾") { chooseWeek() }.apply { background = null; textSize = 13f; setPadding(dp(4), 0, dp(4), 0); setSingleLine() }, LinearLayout.LayoutParams(dp(87), dp(38)))
-        controls.addView(button("›") { changeWeek(week + 1) }.apply { background = null; textSize = 23f; setPadding(0, 0, 0, 0) }, LinearLayout.LayoutParams(dp(30), dp(38)))
-        controls.addView(label("${monday.monthValue}/${monday.dayOfMonth}–${monday.plusDays(6).monthValue}/${monday.plusDays(6).dayOfMonth}", 11f).apply { gravity = Gravity.CENTER; alpha = .65f; setSingleLine(); setOnClickListener { chooseDate() }; contentDescription = "按日期跳周" }, LinearLayout.LayoutParams(0, dp(38), 1f))
+        controls.addView(button("‹") { changeWeek(week - 1) }.apply { background = null; textSize = 23f; setPadding(0, 0, 0, 0) }, LinearLayout.LayoutParams(dp(30), dp(34)))
+        controls.addView(button("第 $week 周 ▾") { chooseWeek() }.apply { background = null; textSize = 13f; setPadding(dp(4), 0, dp(4), 0); setSingleLine() }, LinearLayout.LayoutParams(dp(87), dp(34)))
+        controls.addView(button("›") { changeWeek(week + 1) }.apply { background = null; textSize = 23f; setPadding(0, 0, 0, 0) }, LinearLayout.LayoutParams(dp(30), dp(34)))
+        controls.addView(label("${monday.monthValue}/${monday.dayOfMonth}–${monday.plusDays(6).monthValue}/${monday.plusDays(6).dayOfMonth}", 11f).apply { gravity = Gravity.CENTER; alpha = .65f; setSingleLine(); setOnClickListener { chooseDate() }; contentDescription = "按日期跳周" }, LinearLayout.LayoutParams(0, dp(34), 1f))
         controls.addView(button("本周") { changeWeek(store.currentWeek()) }.apply { textSize = 11f; setPadding(dp(6), 0, dp(6), 0); setSingleLine() }, LinearLayout.LayoutParams(dp(46), dp(32)))
         top.addView(controls)
-        status = label("", 11f).apply { setPadding(dp(8), dp(8), dp(8), dp(8)); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; background = GradientDrawable().apply { setColor(if (dark) 0xff203441.toInt() else 0xffedf3f3.toInt()); cornerRadius = dp(10).toFloat() } }
-        top.addView(status, LinearLayout.LayoutParams(-1, dp(34)).apply { topMargin = dp(5) }); updateNow()
+        status = label("", 11f).apply { setPadding(dp(8), dp(5), dp(8), dp(5)); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; background = GradientDrawable().apply { setColor(if (dark) 0xff203441.toInt() else 0xffedf3f3.toInt()); cornerRadius = dp(10).toFloat() } }
+        top.addView(status, LinearLayout.LayoutParams(-1, dp(28)).apply { topMargin = dp(3) }); updateNow()
         top.addView(label(message, 10f).apply { alpha = .55f; setSingleLine(); ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(3), dp(5), 0, 0); setOnClickListener { if (store.username.isBlank() || sessionExpired) credentials() else load() } })
         page.addView(top)
-        val scroll = ScrollView(this).apply { clipToPadding = false; setPadding(0, dp(2), 0, dp(8)) }
-        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         if (schedule == null) {
-            body.addView(LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(18), dp(48), dp(18), dp(24))
+            page.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(18), dp(20), dp(18), dp(24))
                 addView(label("暂无课表", 18f, true))
                 addView(label("登录学校账号后同步课表", 12f).apply { alpha = .6f; setPadding(0, dp(10), 0, dp(20)) })
                 addView(button("登录") { credentials() }, LinearLayout.LayoutParams(dp(130), dp(44)))
-            })
+            }, LinearLayout.LayoutParams(-1, 0, 1f))
         } else {
-            body.addView(grid(dark))
-            if (schedule!!.courses.isEmpty()) body.addView(label("本周暂无课程", 13f).apply { gravity = Gravity.CENTER; setPadding(0, dp(12), 0, dp(12)) })
-            if (schedule!!.remark.isNotBlank()) body.addView(label(schedule!!.remark, 12f).apply { alpha = .65f; setPadding(dp(10), dp(12), dp(10), dp(12)) })
+            page.addView(grid(dark, true), LinearLayout.LayoutParams(-1, 0, 1f))
+            if (schedule!!.remark.isNotBlank()) page.addView(label("课表说明  ›", 10f).apply {
+                alpha = .6f; gravity = Gravity.CENTER; setOnClickListener { AlertDialog.Builder(this@MainActivity).setTitle("课表说明").setMessage(schedule!!.remark).setPositiveButton("关闭", null).show() }
+            }, LinearLayout.LayoutParams(-1, dp(22)))
         }
-        scroll.addView(body); page.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
     }
-    private fun grid(exportDark: Boolean) = TimetableView(this, schedule?.courses.orEmpty(), week, store.firstMonday.plusWeeks((week - 1).toLong()), store.campus ?: SchoolConfig.campuses.keys.first(), exportDark, { name -> if (previewScreen == null) store.note(name) else "" }, store::courseColorIndex, ::courseDetails, ::editNote)
+    private fun grid(exportDark: Boolean, fitHeight: Boolean = false) = TimetableView(this, schedule?.courses.orEmpty(), week, store.firstMonday.plusWeeks((week - 1).toLong()), store.campus ?: SchoolConfig.campuses.keys.first(), exportDark, { name -> if (previewScreen == null) store.note(name) else "" }, store::courseColorIndex, ::courseDetails, ::editNote, fitHeight)
 
     private fun updateNow() {
         if (tab != 0 || status == null) return
