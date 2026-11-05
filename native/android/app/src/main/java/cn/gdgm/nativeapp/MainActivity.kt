@@ -207,7 +207,7 @@ class MainActivity : Activity() {
             val table = grid(dark, true)
             val scroll = ScrollView(this).apply {
                 isVerticalScrollBarEnabled = false
-                addView(table, ScrollView.LayoutParams(-1, -2))
+                addView(table, FrameLayout.LayoutParams(-1, -2))
                 addOnLayoutChangeListener { view, _, top, _, bottom, _, oldTop, _, oldBottom ->
                     if (bottom - top != oldBottom - oldTop) table.fitViewport(view.height - view.paddingTop - view.paddingBottom)
                 }
