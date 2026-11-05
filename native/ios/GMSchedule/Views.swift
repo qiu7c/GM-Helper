@@ -320,7 +320,7 @@ struct TimetableGrid: View {
         return VStack(alignment: .leading, spacing: compact ? 3 : 6) {
             if !compact { Capsule().fill(color).frame(width: 22, height: 3) }
             Text(course.name).font(.system(size: compact ? 10 : 14, weight: .semibold)).foregroundColor(scheme == .dark ? color.opacity(0.95) : Brand.ink).lineLimit(compact ? (height >= 72 ? 3 : 2) : 3).fixedSize(horizontal: false, vertical: true)
-            if !course.room.isEmpty { Text(course.room).font(.system(size: compact ? 8 : 11)).foregroundColor(scheme == .dark ? .white.opacity(0.72) : color).lineLimit(compact ? 1 : 2).padding(.trailing, additional > 0 ? 12 : 0) }
+            if !course.room.isEmpty { Text(course.room).font(.system(size: compact ? 8 : 11)).foregroundColor(scheme == .dark ? .white.opacity(0.72) : color).lineLimit(2).padding(.trailing, additional > 0 ? 12 : 0) }
             if !compact && !course.teacher.isEmpty { Text(course.teacher).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1) }
             if !compact && !note(course).isEmpty { Image(systemName: "pencil.line").font(.system(size: 11)).foregroundColor(color).accessibilityLabel("有课程备注") }
             Spacer(minLength: 0)
