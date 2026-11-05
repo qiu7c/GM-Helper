@@ -28,6 +28,15 @@ class TimetableView(
         val palette = intArrayOf(0xffd8e8fa.toInt(), 0xffd9eee4.toInt(), 0xfff4e9ce.toInt(), 0xfff4dfd4.toInt(), 0xffe6dff5.toInt(), 0xffd6eced.toInt(), 0xffeddfeb.toInt(), 0xffe6e8d6.toInt())
     }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+    /** The parent supplies the actual viewport after system bars, toolbar and floating navigation. */
+    fun fitViewport(height: Int) {
+        val rowHeight = (height - getChildAt(0).measuredHeight) / 5
+        for (i in 1 until childCount) {
+            val row = getChildAt(i) as LinearLayout
+            row.minimumHeight = rowHeight
+        }
+        requestLayout()
+    }
     init {
         orientation = VERTICAL
         val ink = if (dark) Color.WHITE else Color.rgb(38, 45, 62)
@@ -53,13 +62,13 @@ class TimetableView(
         for (period in 1..times.count { it.first.isNotBlank() }) {
             val row = LinearLayout(context)
             row.gravity = Gravity.TOP
-            val rowHeight = if (fitHeight) LayoutParams.MATCH_PARENT else dp(maxOf(120, (1..7).maxOf { d -> courses.count { it.day == d && it.period == period } } * 88))
+            if (!fitHeight) row.minimumHeight = dp(maxOf(120, (1..7).maxOf { d -> courses.count { it.day == d && it.period == period } } * 88))
             row.addView(TextView(context).apply {
                 val time = times[period - 1]
                 text = "$period\n${time.first}\n${time.second}"; textSize = if (compact) 8f else 9f
                 gravity = Gravity.CENTER; setTextColor(muted)
                 contentDescription = "第${period}大节 ${time.first}至${time.second}"
-            }, LayoutParams(timeWidth, rowHeight))
+            }, LayoutParams(timeWidth, LayoutParams.MATCH_PARENT))
             for (day in 1..7) {
                 val cell = LinearLayout(context).apply {
                     orientation = VERTICAL
@@ -74,10 +83,11 @@ class TimetableView(
                     val color = palette[colorIndex(course.name)]
                     val fill = if (dark) Color.rgb(Color.red(color) * 30 / 100, Color.green(color) * 30 / 100, Color.blue(color) * 30 / 100) else color
                     val block = LinearLayout(context).apply {
-                        orientation = VERTICAL; setPadding(dp(3), dp(if (fitHeight) 1 else 6), dp(3), dp(if (fitHeight) 0 else 4))
+                        orientation = VERTICAL; setPadding(dp(3), dp(if (fitHeight) 3 else 6), dp(3), dp(if (fitHeight) 2 else 4))
                         background = GradientDrawable().apply { setColor(fill); cornerRadius = dp(if (fitHeight) 8 else 12).toFloat() }
-                        addView(TextView(context).apply { text = course.name; textSize = if (compact) 10f else 10.5f; maxLines = if (fitHeight) 2 else 3; ellipsize = android.text.TextUtils.TruncateAt.END; includeFontPadding = false; setTypeface(null, Typeface.BOLD); setTextColor(if (dark) 0xfff1f4fa.toInt() else 0xff34495c.toInt()) })
-                        if (course.room.isNotBlank() || fitHeight && lessons.size > 1) addView(TextView(context).apply { text = if (fitHeight && lessons.size > 1) "共${lessons.size}门 · 点选" else course.room; textSize = 9f; maxLines = if (fitHeight && lessons.size == 1) 2 else 1; includeFontPadding = false; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(if (dark) 0xffd3dce7.toInt() else 0xff566a78.toInt()); setPadding(0, dp(if (fitHeight) 1 else 2), 0, 0) })
+                        addView(TextView(context).apply { text = course.name; textSize = if (compact) 10f else 10.5f; includeFontPadding = false; setTypeface(null, Typeface.BOLD); setTextColor(if (dark) 0xfff1f4fa.toInt() else 0xff34495c.toInt()) })
+                        if (course.room.isNotBlank()) addView(TextView(context).apply { text = course.room; textSize = 9f; includeFontPadding = false; setTextColor(if (dark) 0xffd3dce7.toInt() else 0xff566a78.toInt()); setPadding(0, dp(if (fitHeight) 1 else 2), 0, 0) })
+                        if (fitHeight && lessons.size > 1) addView(TextView(context).apply { text = "${lessons.size}门 ›"; textSize = 8f; setTextColor(if (dark) 0xffd3dce7.toInt() else 0xff566a78.toInt()); setPadding(0, dp(2), 0, 0) })
                         if (!fitHeight && course.teacher.isNotBlank()) addView(TextView(context).apply { text = course.teacher; textSize = 9f; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(if (dark) 0xffbec9d5.toInt() else 0xff687884.toInt()); setPadding(0, dp(2), 0, 0) })
                         if (!fitHeight && memo.isNotBlank()) addView(TextView(context).apply { text = "✎ $memo"; textSize = 8f; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(if (dark) Color.WHITE else 0xff405b6a.toInt()); setPadding(0, dp(4), 0, 0) })
                         setOnClickListener {
@@ -91,11 +101,11 @@ class TimetableView(
                         }
                         contentDescription = "${course.name}，${course.room}，${course.teacher}。点按详情，长按备注"
                     }
-                    cell.addView(block, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f).apply { setMargins(dp(1), dp(if (fitHeight) 1 else 2), dp(1), dp(if (fitHeight) 1 else 2)) })
+                    cell.addView(block, LayoutParams(LayoutParams.MATCH_PARENT, if (fitHeight) LayoutParams.MATCH_PARENT else LayoutParams.WRAP_CONTENT).apply { setMargins(dp(1), dp(if (fitHeight) 1 else 2), dp(1), dp(if (fitHeight) 1 else 2)) })
                 }
-                row.addView(cell, LayoutParams(0, rowHeight, 1f))
+                row.addView(cell, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
             }
-            addView(row, if (fitHeight) LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f) else LayoutParams(LayoutParams.MATCH_PARENT, rowHeight))
+            addView(row, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         }
         contentDescription = "第 $week 周课表"
     }

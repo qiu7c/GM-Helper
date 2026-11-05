@@ -178,8 +178,10 @@ struct TimetableView: View {
                 if let info = model.update, info.newer { HStack { Text("新版本 \(info.version)"); Spacer(); if let url = info.download { Link("查看下载", destination: url) } }.font(.caption).padding(8).background(Color.accentColor.opacity(0.12)) }
                 if let schedule = model.schedule {
                     GeometryReader { geometry in
-                        TimetableGrid(schedule: schedule, week: model.preferences.week, calendar: model.calendar, note: { model.note($0) }, colorIndex: { model.courseColorIndex(course: $0) }, select: { selectedCourse = $0 }, width: geometry.size.width - 16, compact: true, availableHeight: geometry.size.height - 8)
-                            .padding(.horizontal, 8).padding(.bottom, 8)
+                        ScrollView(.vertical) {
+                            TimetableGrid(schedule: schedule, week: model.preferences.week, calendar: model.calendar, note: { model.note($0) }, colorIndex: { model.courseColorIndex(course: $0) }, select: { selectedCourse = $0 }, width: geometry.size.width - 16, compact: true, availableHeight: geometry.size.height - 8)
+                                .padding(.horizontal, 8).padding(.bottom, 8)
+                        }
                     }
                     if !schedule.remark.isEmpty { Text(schedule.remark).font(.caption2).foregroundColor(.secondary).lineLimit(1).padding(.horizontal) }
                 } else {
@@ -281,7 +283,8 @@ struct TimetableGrid: View {
                 let periodCourses = schedule.visibleCourses(week: week).filter { $0.period == period }
                 let stackCount = max(1, (1...7).map { day in periodCourses.filter { $0.day == day }.count }.max() ?? 1)
                 let cardHeight: CGFloat = 180
-                let rowHeight = compact ? (availableHeight - 46 - CGFloat(schedule.campus.periods.count) * 6) / CGFloat(schedule.campus.periods.count) : CGFloat(stackCount) * cardHeight + CGFloat(stackCount - 1) * 4
+                let visibleRows = min(5, schedule.campus.periods.count)
+                let rowHeight = compact ? (availableHeight - 46 - CGFloat(visibleRows) * 6) / CGFloat(visibleRows) : CGFloat(stackCount) * cardHeight + CGFloat(stackCount - 1) * 4
                 HStack(alignment: .top, spacing: gap) {
                     VStack(spacing: compact ? 2 : 5) {
                         Text(String(format: "%02d", period)).font(.system(size: compact ? 11 : 19, weight: .semibold, design: .rounded)).foregroundColor(Brand.ink)
@@ -309,10 +312,10 @@ struct TimetableGrid: View {
                                     courseCard(course, height: cardHeight).contentShape(Rectangle()).onTapGesture { select(course) }.onLongPressGesture { select(course) }
                                 }
                             }
-                        }.frame(width: columnWidth, height: rowHeight, alignment: .top)
+                        }.frame(width: columnWidth).frame(minHeight: rowHeight, maxHeight: .infinity, alignment: .top)
                             .background(isToday(day) ? Brand.blue.opacity(0.035) : Brand.surface.opacity(0.3)).cornerRadius(compact ? 11 : 16)
                     }
-                }.frame(height: rowHeight, alignment: .top)
+                }.frame(minHeight: rowHeight, alignment: .top).fixedSize(horizontal: false, vertical: true)
             }
         }.frame(width: width).foregroundColor(Brand.ink)
     }
@@ -320,12 +323,12 @@ struct TimetableGrid: View {
         let color = Brand.courseColors[colorIndex(course)]
         return VStack(alignment: .leading, spacing: compact ? 2 : 6) {
             if !compact { Capsule().fill(color).frame(width: 22, height: 3) }
-            Text(course.name).font(.system(size: compact ? 10 : 14, weight: .semibold)).foregroundColor(scheme == .dark ? color.opacity(0.95) : Brand.ink).lineLimit(compact ? (height >= 72 ? 3 : 2) : 3).fixedSize(horizontal: false, vertical: true)
-            if !course.room.isEmpty { Text(course.room).font(.system(size: compact ? 8 : 11)).foregroundColor(scheme == .dark ? .white.opacity(0.72) : color).lineLimit(2).padding(.trailing, additional > 0 ? 12 : 0) }
+            Text(course.name).font(.system(size: compact ? 10 : 14, weight: .semibold)).foregroundColor(scheme == .dark ? color.opacity(0.95) : Brand.ink).lineLimit(nil).fixedSize(horizontal: false, vertical: true)
+            if !course.room.isEmpty { Text(course.room).font(.system(size: compact ? 8 : 11)).foregroundColor(scheme == .dark ? .white.opacity(0.72) : color).lineLimit(nil).fixedSize(horizontal: false, vertical: true).padding(.trailing, additional > 0 ? 12 : 0) }
             if !compact && !course.teacher.isEmpty { Text(course.teacher).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1) }
             if !compact && !note(course).isEmpty { Image(systemName: "pencil.line").font(.system(size: 11)).foregroundColor(color).accessibilityLabel("有课程备注") }
             Spacer(minLength: 0)
-        }.padding(.horizontal, compact ? 4 : 10).padding(.vertical, compact ? 3 : 12).frame(width: columnWidth, height: height, alignment: .topLeading).clipped()
+        }.padding(.horizontal, compact ? 4 : 10).padding(.vertical, compact ? 3 : 12).frame(width: columnWidth).frame(minHeight: height, maxHeight: .infinity, alignment: .topLeading)
             .background(color.opacity(scheme == .dark ? 0.20 : 0.13)).cornerRadius(compact ? 8 : 16)
             .overlay(RoundedRectangle(cornerRadius: compact ? 8 : 16).stroke(color.opacity(0.13), lineWidth: 0.7))
             .overlay(alignment: .bottomTrailing) {

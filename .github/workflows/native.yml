@@ -132,6 +132,9 @@ jobs:
             adb shell am start -W -n cn.gdgm.schedule.gdgm_schedule.nativepreview/cn.gdgm.nativeapp.MainActivity --es preview_screen timetable
             sleep 3
             adb exec-out screencap -p > dist/android-timetable.png
+            adb shell input swipe 160 520 160 260 300
+            sleep 1
+            adb exec-out screencap -p > dist/android-timetable-bottom.png
             adb shell am force-stop cn.gdgm.schedule.gdgm_schedule.nativepreview
             adb shell am start -W -n cn.gdgm.schedule.gdgm_schedule.nativepreview/cn.gdgm.nativeapp.MainActivity --es preview_screen settings
             sleep 3

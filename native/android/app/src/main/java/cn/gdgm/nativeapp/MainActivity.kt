@@ -82,7 +82,7 @@ class MainActivity : Activity() {
         schedule = store.readSchedule(week)
         if (previewScreen == "timetable" || previewScreen == "settings") {
             val day = LocalDate.now().dayOfWeek.value
-            schedule = Schedule(listOf(Course("高等数学", "陈老师", "教学楼 A301", day = day, period = 1), Course("大学英语", "林老师", "博学楼 B205", day = (day % 7) + 1, period = 2), Course("程序设计基础", "王老师", "实训楼 C402", day = day, period = 3)), emptyList(), emptyList(), emptyList(), "2026-2027-1", week.toString(), SchoolConfig.campuses.keys.first())
+            schedule = Schedule(listOf(Course("高等数学", "陈老师", "教学楼 A301", day = day, period = 1), Course("大学英语", "林老师", "博学楼 B205", day = (day % 7) + 1, period = 2), Course("程序设计基础", "王老师", "实训楼 C402", day = day, period = 3), Course("思想道德与法治", "示例教师", "明德楼 B102", day = (day + 1) % 7 + 1, period = 4), Course("大学体育", "示例教师", "体育馆", day = day, period = 5), Course("晚间自习", "示例教师", "综合楼 201", day = day, period = 6)), emptyList(), emptyList(), emptyList(), "2026-2027-1", week.toString(), SchoolConfig.campuses.keys.first())
             message = "演示课表 · 虚构课程"
         }
         if (previewScreen == "settings") tab = 2
@@ -204,7 +204,15 @@ class MainActivity : Activity() {
                 addView(button("登录") { credentials() }, LinearLayout.LayoutParams(dp(130), dp(44)))
             }, LinearLayout.LayoutParams(-1, 0, 1f))
         } else {
-            page.addView(grid(dark, true), LinearLayout.LayoutParams(-1, 0, 1f))
+            val table = grid(dark, true)
+            val scroll = ScrollView(this).apply {
+                isVerticalScrollBarEnabled = false
+                addView(table, ScrollView.LayoutParams(-1, -2))
+                addOnLayoutChangeListener { view, _, top, _, bottom, _, oldTop, _, oldBottom ->
+                    if (bottom - top != oldBottom - oldTop) table.fitViewport(view.height - view.paddingTop - view.paddingBottom)
+                }
+            }
+            page.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
             if (schedule!!.remark.isNotBlank()) page.addView(label("课表说明  ›", 10f).apply {
                 alpha = .6f; gravity = Gravity.CENTER; setOnClickListener { AlertDialog.Builder(this@MainActivity).setTitle("课表说明").setMessage(schedule!!.remark).setPositiveButton("关闭", null).show() }
             }, LinearLayout.LayoutParams(-1, dp(22)))
