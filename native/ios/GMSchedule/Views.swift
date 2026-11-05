@@ -318,14 +318,14 @@ struct TimetableGrid: View {
     }
     private func courseCard(_ course: Course, height: CGFloat, additional: Int = 0) -> some View {
         let color = Brand.courseColors[colorIndex(course)]
-        return VStack(alignment: .leading, spacing: compact ? 3 : 6) {
+        return VStack(alignment: .leading, spacing: compact ? 2 : 6) {
             if !compact { Capsule().fill(color).frame(width: 22, height: 3) }
             Text(course.name).font(.system(size: compact ? 10 : 14, weight: .semibold)).foregroundColor(scheme == .dark ? color.opacity(0.95) : Brand.ink).lineLimit(compact ? (height >= 72 ? 3 : 2) : 3).fixedSize(horizontal: false, vertical: true)
             if !course.room.isEmpty { Text(course.room).font(.system(size: compact ? 8 : 11)).foregroundColor(scheme == .dark ? .white.opacity(0.72) : color).lineLimit(2).padding(.trailing, additional > 0 ? 12 : 0) }
             if !compact && !course.teacher.isEmpty { Text(course.teacher).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1) }
             if !compact && !note(course).isEmpty { Image(systemName: "pencil.line").font(.system(size: 11)).foregroundColor(color).accessibilityLabel("有课程备注") }
             Spacer(minLength: 0)
-        }.padding(.horizontal, compact ? 4 : 10).padding(.vertical, compact ? 5 : 12).frame(width: columnWidth, height: height, alignment: .topLeading).clipped()
+        }.padding(.horizontal, compact ? 4 : 10).padding(.vertical, compact ? 3 : 12).frame(width: columnWidth, height: height, alignment: .topLeading).clipped()
             .background(color.opacity(scheme == .dark ? 0.20 : 0.13)).cornerRadius(compact ? 8 : 16)
             .overlay(RoundedRectangle(cornerRadius: compact ? 8 : 16).stroke(color.opacity(0.13), lineWidth: 0.7))
             .overlay(alignment: .bottomTrailing) {
