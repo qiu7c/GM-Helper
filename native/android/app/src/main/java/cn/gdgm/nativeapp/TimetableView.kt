@@ -74,10 +74,10 @@ class TimetableView(
                     val color = palette[colorIndex(course.name)]
                     val fill = if (dark) Color.rgb(Color.red(color) * 30 / 100, Color.green(color) * 30 / 100, Color.blue(color) * 30 / 100) else color
                     val block = LinearLayout(context).apply {
-                        orientation = VERTICAL; setPadding(dp(3), dp(if (fitHeight) 3 else 6), dp(3), dp(if (fitHeight) 2 else 4))
-                        background = GradientDrawable().apply { setColor(fill); cornerRadius = dp(12).toFloat() }
+                        orientation = VERTICAL; setPadding(dp(3), dp(if (fitHeight) 1 else 6), dp(3), dp(if (fitHeight) 0 else 4))
+                        background = GradientDrawable().apply { setColor(fill); cornerRadius = dp(if (fitHeight) 8 else 12).toFloat() }
                         addView(TextView(context).apply { text = course.name; textSize = if (compact) 10f else 10.5f; maxLines = if (fitHeight) 2 else 3; ellipsize = android.text.TextUtils.TruncateAt.END; includeFontPadding = false; setTypeface(null, Typeface.BOLD); setTextColor(if (dark) 0xfff1f4fa.toInt() else 0xff34495c.toInt()) })
-                        if (course.room.isNotBlank() || fitHeight && lessons.size > 1) addView(TextView(context).apply { text = if (fitHeight && lessons.size > 1) "共${lessons.size}门 · 点选" else course.room; textSize = 9f; maxLines = if (fitHeight && lessons.size == 1) 2 else 1; includeFontPadding = false; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(if (dark) 0xffd3dce7.toInt() else 0xff566a78.toInt()); setPadding(0, dp(2), 0, 0) })
+                        if (course.room.isNotBlank() || fitHeight && lessons.size > 1) addView(TextView(context).apply { text = if (fitHeight && lessons.size > 1) "共${lessons.size}门 · 点选" else course.room; textSize = 9f; maxLines = if (fitHeight && lessons.size == 1) 2 else 1; includeFontPadding = false; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(if (dark) 0xffd3dce7.toInt() else 0xff566a78.toInt()); setPadding(0, dp(if (fitHeight) 1 else 2), 0, 0) })
                         if (!fitHeight && course.teacher.isNotBlank()) addView(TextView(context).apply { text = course.teacher; textSize = 9f; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(if (dark) 0xffbec9d5.toInt() else 0xff687884.toInt()); setPadding(0, dp(2), 0, 0) })
                         if (!fitHeight && memo.isNotBlank()) addView(TextView(context).apply { text = "✎ $memo"; textSize = 8f; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(if (dark) Color.WHITE else 0xff405b6a.toInt()); setPadding(0, dp(4), 0, 0) })
                         setOnClickListener {
@@ -91,7 +91,7 @@ class TimetableView(
                         }
                         contentDescription = "${course.name}，${course.room}，${course.teacher}。点按详情，长按备注"
                     }
-                    cell.addView(block, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f).apply { setMargins(dp(1), dp(2), dp(1), dp(2)) })
+                    cell.addView(block, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f).apply { setMargins(dp(1), dp(if (fitHeight) 1 else 2), dp(1), dp(if (fitHeight) 1 else 2)) })
                 }
                 row.addView(cell, LayoutParams(0, rowHeight, 1f))
             }

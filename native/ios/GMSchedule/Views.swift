@@ -191,6 +191,7 @@ struct TimetableView: View {
                     Spacer()
                 }
             }
+            .padding(.bottom, 78)
             .background(AppBackground())
             .navigationTitle("广贸课表")
             .navigationBarTitleDisplayMode(.inline)
@@ -428,7 +429,7 @@ struct ProfileView: View {
                         Button(role: .destructive) { Task { await model.logout() } } label: { Label("退出登录并清除课表缓存", systemImage: "rectangle.portrait.and.arrow.right").font(.subheadline).frame(maxWidth: .infinity).padding(18).background(Brand.surface).cornerRadius(19) }.disabled(model.busy)
                     }
                     Text("GMPluse · 广贸课表").font(.caption2).foregroundColor(.secondary).padding(.vertical, 12)
-                }.padding(20)
+                }.padding(20).padding(.bottom, 78)
             }.background(AppBackground()).navigationTitle("我的").navigationBarTitleDisplayMode(.inline)
         }.navigationViewStyle(.stack)
     }
@@ -475,7 +476,7 @@ struct SettingsView: View {
                         ScrollView { Text("3.0.1 (21)\n\n使用 SwiftUI 重建 iOS 客户端。包含学校统一认证、周课表、学籍查询、按账号隔离的缓存和备注、系统明暗适配、课表图片分享和本地课前通知。\n\n本版本移除服务器抓取、Bark 和后台轮询。通知仅依据设备已缓存的课表安排。\n\nHTML 解析使用 SwiftSoup（MIT）：https://github.com/scinfu/SwiftSoup\n\n旧 Flutter 数据仅在相同应用容器内尝试导入可归属账号的偏好与课表；旧版无账号备注不会自动归入新账号，旧密码和 Cookie 不导入。").padding() }.navigationTitle("版本说明")
                     }
                 }
-                }.padding(20)
+                }.padding(20).padding(.bottom, 78)
             }.background(AppBackground()).navigationTitle("设置").navigationBarTitleDisplayMode(.inline)
         }.navigationViewStyle(.stack)
     }
